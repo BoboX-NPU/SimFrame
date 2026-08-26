@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+DerivedData/
+build/
+Exports/
+*.xcuserstate
+xcuserdata/
+AppleDeviceFrames/
+LocalFixtures/
+
