@@ -8,12 +8,26 @@ enum TestImageFactory {
     static func writeFrame(
         to url: URL,
         canvas: CGSize = CGSize(width: 360, height: 720),
-        screen: CGRect = CGRect(x: 20, y: 40, width: 320, height: 640)
+        screen: CGRect = CGRect(x: 20, y: 40, width: 320, height: 640),
+        screenCornerRadius: CGFloat = 0
     ) throws {
         let context = try bitmapContext(size: canvas)
         context.setFillColor(CGColor(gray: 0.12, alpha: 1))
         context.fill(CGRect(origin: .zero, size: canvas))
-        context.clear(screen)
+        if screenCornerRadius > 0 {
+            context.saveGState()
+            context.setBlendMode(.clear)
+            context.addPath(CGPath(
+                roundedRect: screen,
+                cornerWidth: screenCornerRadius,
+                cornerHeight: screenCornerRadius,
+                transform: nil
+            ))
+            context.fillPath()
+            context.restoreGState()
+        } else {
+            context.clear(screen)
+        }
         try write(context.makeImage()!, to: url)
     }
 

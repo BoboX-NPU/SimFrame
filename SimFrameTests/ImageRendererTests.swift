@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import Foundation
 import ImageIO
 import XCTest
@@ -69,6 +70,23 @@ final class ImageRendererTests: XCTestCase {
         XCTAssertEqual(alpha(image, x: 0, y: 0), 0)
     }
 
+    func testFrameAlphaDefinesRoundedScreenApertureMask() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let frameURL = directory.appendingPathComponent("Rounded Phone - Black - Portrait.png")
+        try TestImageFactory.writeFrame(to: frameURL, screenCornerRadius: 48)
+        let frame = try FrameScanner.scan(url: frameURL)
+        let geometry = CompositionGeometry(frame: frame, preset: .original)
+        let frameImage = try XCTUnwrap(CIImage(contentsOf: frameURL))
+        let prepared = CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
+        let screenBounds = geometry.coreImageRect(fromTopLeft: geometry.screenRect)
+        let maskImage = try XCTUnwrap(CIContext().createCGImage(prepared.apertureMask, from: screenBounds))
+
+        XCTAssertLessThan(red(maskImage, x: 2, y: 2), 8)
+        XCTAssertGreaterThan(red(maskImage, x: maskImage.width / 2, y: maskImage.height / 2), 247)
+    }
+
     private func bytes(_ image: CGImage) -> [UInt8] {
         let data = image.dataProvider!.data!
         return Array(UnsafeBufferPointer(start: CFDataGetBytePtr(data), count: CFDataGetLength(data)))
@@ -80,5 +98,9 @@ final class ImageRendererTests: XCTestCase {
 
     private func blue(_ image: CGImage, x: Int, y: Int) -> UInt8 {
         bytes(image)[y * image.bytesPerRow + x * 4 + 2]
+    }
+
+    private func red(_ image: CGImage, x: Int, y: Int) -> UInt8 {
+        bytes(image)[y * image.bytesPerRow + x * 4]
     }
 }

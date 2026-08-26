@@ -23,9 +23,10 @@ final class ImageRenderer: @unchecked Sendable {
             throw SimFrameError.unsupportedFile
         }
         let geometry = CompositionGeometry(frame: frame, preset: settings.canvasPreset)
+        let preparedFrame = CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
         let output = CompositionRenderer.composite(
             content: content,
-            frame: frameImage,
+            preparedFrame: preparedFrame,
             geometry: geometry,
             background: settings.background
         )
@@ -74,9 +75,52 @@ final class ImageRenderer: @unchecked Sendable {
 }
 
 enum CompositionRenderer {
+    struct PreparedFrame {
+        let artwork: CIImage
+        let apertureMask: CIImage
+    }
+
+    static func prepareFrame(_ frame: CIImage, geometry: CompositionGeometry) -> PreparedFrame {
+        let targetFrame = geometry.coreImageRect(fromTopLeft: geometry.frameRect)
+        let normalizedFrame = normalize(frame)
+        let frameScaleX = targetFrame.width / max(normalizedFrame.extent.width, 1)
+        let frameScaleY = targetFrame.height / max(normalizedFrame.extent.height, 1)
+        var placedFrame = normalizedFrame.transformed(by: CGAffineTransform(scaleX: frameScaleX, y: frameScaleY))
+        placedFrame = placedFrame.transformed(by: CGAffineTransform(
+            translationX: targetFrame.minX - placedFrame.extent.minX,
+            y: targetFrame.minY - placedFrame.extent.minY
+        ))
+
+        let targetScreen = geometry.coreImageRect(fromTopLeft: geometry.screenRect)
+        let apertureMask = placedFrame
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: -1),
+                "inputGVector": CIVector(x: 0, y: 0, z: 0, w: -1),
+                "inputBVector": CIVector(x: 0, y: 0, z: 0, w: -1),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputBiasVector": CIVector(x: 1, y: 1, z: 1, w: 1)
+            ])
+            .cropped(to: targetScreen)
+        return PreparedFrame(artwork: placedFrame, apertureMask: apertureMask)
+    }
+
     static func composite(
         content: CIImage,
         frame: CIImage,
+        geometry: CompositionGeometry,
+        background: RenderBackground
+    ) -> CIImage {
+        composite(
+            content: content,
+            preparedFrame: prepareFrame(frame, geometry: geometry),
+            geometry: geometry,
+            background: background
+        )
+    }
+
+    static func composite(
+        content: CIImage,
+        preparedFrame: PreparedFrame,
         geometry: CompositionGeometry,
         background: RenderBackground
     ) -> CIImage {
@@ -108,19 +152,17 @@ enum CompositionRenderer {
             y: targetScreen.midY - placedContent.extent.midY
         ))
         placedContent = placedContent.cropped(to: targetScreen)
-
-        let targetFrame = geometry.coreImageRect(fromTopLeft: geometry.frameRect)
-        let normalizedFrame = normalize(frame)
-        let frameScaleX = targetFrame.width / max(normalizedFrame.extent.width, 1)
-        let frameScaleY = targetFrame.height / max(normalizedFrame.extent.height, 1)
-        var placedFrame = normalizedFrame.transformed(by: CGAffineTransform(scaleX: frameScaleX, y: frameScaleY))
-        placedFrame = placedFrame.transformed(by: CGAffineTransform(
-            translationX: targetFrame.minX - placedFrame.extent.minX,
-            y: targetFrame.minY - placedFrame.extent.minY
-        ))
+        let transparentScreen = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0))
+            .cropped(to: targetScreen)
+        placedContent = placedContent
+            .applyingFilter("CIBlendWithMask", parameters: [
+                kCIInputBackgroundImageKey: transparentScreen,
+                "inputMaskImage": preparedFrame.apertureMask
+            ])
+            .cropped(to: targetScreen)
 
         if geometry.shadowRadius > 0 {
-            var shadow = placedFrame.applyingFilter("CIColorMatrix", parameters: [
+            var shadow = preparedFrame.artwork.applyingFilter("CIColorMatrix", parameters: [
                 "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
                 "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
                 "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
@@ -135,7 +177,7 @@ enum CompositionRenderer {
         }
 
         result = placedContent.composited(over: result)
-        result = placedFrame.composited(over: result)
+        result = preparedFrame.artwork.composited(over: result)
         return result.cropped(to: outputBounds)
     }
 

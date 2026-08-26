@@ -25,7 +25,8 @@ final class VideoRendererTests: XCTestCase {
         let targetRate = VideoRenderer.targetAverageBitRate(
             outputSize: outputSize,
             displayedSourceSize: sourceSize,
-            sourceEstimatedBitRate: sourceRate
+            sourceEstimatedBitRate: sourceRate,
+            exportFormat: .mp4
         )
         let areaScale = Double(
             (outputSize.width * outputSize.height) / (sourceSize.width * sourceSize.height)
@@ -40,10 +41,30 @@ final class VideoRendererTests: XCTestCase {
             VideoRenderer.targetAverageBitRate(
                 outputSize: CGSize(width: 360, height: 720),
                 displayedSourceSize: CGSize(width: 320, height: 640),
-                sourceEstimatedBitRate: 0
+                sourceEstimatedBitRate: 0,
+                exportFormat: .mp4
             ),
             8_000_000
         )
+    }
+
+    func testMOVTargetBitRateUsesHighDetailQualityFloor() {
+        let outputSize = CGSize(width: 1_350, height: 2_760)
+        let movRate = VideoRenderer.targetAverageBitRate(
+            outputSize: outputSize,
+            displayedSourceSize: CGSize(width: 1_206, height: 2_622),
+            sourceEstimatedBitRate: 10_000_000,
+            exportFormat: .mov
+        )
+        let mp4Rate = VideoRenderer.targetAverageBitRate(
+            outputSize: outputSize,
+            displayedSourceSize: CGSize(width: 1_206, height: 2_622),
+            sourceEstimatedBitRate: 10_000_000,
+            exportFormat: .mp4
+        )
+
+        XCTAssertGreaterThanOrEqual(movRate, Int((outputSize.width * outputSize.height * 12).rounded(.up)))
+        XCTAssertGreaterThan(movRate, mp4Rate)
     }
 
     func testMP4ExportKeepsDurationAndUsesH264() async throws {

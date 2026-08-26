@@ -188,3 +188,34 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - Existing commit messages are unchanged; the new format applies to this and future commits.
+
+## 2026-08-26 — Added Rounded Screen Clipping and Sharper MOV Output
+
+### Change Summary
+
+- Derived a reusable screen-aperture mask from each frame PNG's alpha channel so image and video content follows the frame's real rounded corners and display cutouts.
+- Shared the same prepared frame artwork and aperture geometry across still-image and per-frame video composition.
+- Raised the MOV bitrate floor and source-rate headroom to preserve fine device-frame highlights and antialiased edges more clearly than the MP4 policy.
+- Added regression coverage for rounded alpha apertures and the higher-detail MOV bitrate policy.
+
+### Affected Files
+
+- `SimFrame/Services/ImageRenderer.swift`
+- `SimFrame/Services/VideoRenderer.swift`
+- `SimFrameTests/ImageRendererTests.swift`
+- `SimFrameTests/TestImageFactory.swift`
+- `SimFrameTests/VideoRendererTests.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran 10 focused image and video regression tests with `xcodebuild`; all 10 passed with 0 failures.
+- Passing coverage included rounded aperture masking, PNG output, MP4 H.264 export, video orientation, native-player hosting, and MOV/MP4 target-bitrate calculations.
+- Started the local iPhone 17 Pro HEVC with Alpha MOV test twice, but intentionally interrupted both runs after impractically long encoding times. This test is not recorded as passing.
+- The app and test targets compiled successfully. Existing AVFoundation deprecation warnings remain.
+
+### Risks or Follow-up Work
+
+- The user should visually inspect a representative transparent MOV export because the local high-resolution HEVC with Alpha integration test did not complete in a practical test time.
+- Higher MOV quality can increase output size and encoding duration.
