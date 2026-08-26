@@ -101,9 +101,7 @@ struct DropPreviewView: View {
                             y: origin.y + geometry.screenRect.midY * scale
                         )
 
-                    Image(nsImage: frameImage)
-                        .resizable()
-                        .interpolation(.high)
+                    NonInteractiveFrameArtwork(image: frameImage)
                         .frame(width: geometry.frameRect.width * scale, height: geometry.frameRect.height * scale)
                         .shadow(
                             color: .black.opacity(geometry.shadowRadius > 0 ? 0.28 : 0),
@@ -117,7 +115,11 @@ struct DropPreviewView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay { RoundedRectangle(cornerRadius: 16).stroke(.quaternary) }
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(.quaternary)
+                    .allowsHitTesting(false)
+            }
         } else {
             ProgressView("Preparing video preview…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -131,6 +133,20 @@ struct DropPreviewView: View {
         } else {
             Color(nsColor: state.settings.background.color.nsColor)
         }
+    }
+}
+
+/// Device-frame artwork is visual chrome above the native player. A transparent
+/// PNG still owns its full rectangular hit-test region unless explicitly disabled.
+struct NonInteractiveFrameArtwork: View {
+    let image: NSImage
+
+    var body: some View {
+        Image(nsImage: image)
+            .resizable()
+            .interpolation(.high)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

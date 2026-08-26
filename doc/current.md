@@ -27,6 +27,7 @@ SimFrame is a local-first macOS utility that composites iOS Simulator screenshot
 - Provides Original, Balanced, and Spacious canvas presets with transparent or solid backgrounds.
 - Previews, copies, and exports images as PNG. Mismatched aspect ratios use center cropping and display a warning.
 - Exports videos as MOV or MP4 with progress reporting and cancellation, while preserving an available audio track.
+- Previews video with native `AVPlayerView` controls while keeping overlaid device-frame artwork non-interactive so playback controls receive pointer input.
 - Uses HEVC with Alpha for transparent MOV, HEVC for opaque MOV, and H.264 for MP4. Video export normalizes source orientation and calculates the target bitrate from source bitrate and output pixel area.
 - Saves and restores recently opened capture files.
 - Includes a device-frame inspector for correcting the screen region of imported frames.
@@ -55,9 +56,9 @@ SimFrame is a local-first macOS utility that composites iOS Simulator screenshot
 
 - The project contains 14 unit tests and 1 UI test covering frame scanning and replacement, device matching, PNG composition, canvas behavior, video orientation, codecs, audio, transparency, and target bitrate.
 - Standard test command: `xcodebuild -project SimFrame.xcodeproj -scheme SimFrame -destination 'platform=macOS' test`
-- This update clarified that Bug Fixes entries must match bugs actually fixed in the current change. Build and tests were not run.
+- The focused native-player hosting test passed after the video-control hit-testing fix: `VideoRendererTests.testStableVideoPlayerCanBeHostedWithoutAVKitSwiftUIBridge`.
 
 ## Outstanding Work
 
-- No confirmed blockers are currently known.
+- No confirmed blockers are currently known. End-to-end pointer interaction with a user-imported frame and recording remains a manual UI check.
 - After the next feature or fix, replace the relevant information in this file with the resulting implementation and validation state.

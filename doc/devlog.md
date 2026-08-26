@@ -142,3 +142,26 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - None.
+
+## 2026-08-26 — Restored Video Preview Control Interaction
+
+### Change Summary
+
+- Diagnosed the visible but unresponsive video controls as a SwiftUI hit-testing conflict caused by device-frame artwork layered above the native `AVPlayerView`.
+- Marked the device-frame artwork and preview border as non-interactive so pointer events reach the native playback controls.
+- Kept the AppKit bridge limited to `StableVideoPlayer`; SwiftUI remains responsible for preview composition and player ownership.
+
+### Affected Files
+
+- `SimFrame/Views/DropPreviewView.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran `xcodebuild -project SimFrame.xcodeproj -scheme SimFrame -configuration Debug -destination 'platform=macOS' -derivedDataPath .build/DerivedData test -only-testing:SimFrameTests/VideoRendererTests/testStableVideoPlayerCanBeHostedWithoutAVKitSwiftUIBridge`.
+- Result: 1 test executed with 0 failures; the app and test targets compiled successfully and the native `AVPlayerView` bridge was hosted without failure.
+
+### Risks or Follow-up Work
+
+- End-to-end pointer interaction with a user-imported frame and recording remains a manual UI check.
