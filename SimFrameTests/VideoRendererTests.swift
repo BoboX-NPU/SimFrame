@@ -25,8 +25,7 @@ final class VideoRendererTests: XCTestCase {
         let targetRate = VideoRenderer.targetAverageBitRate(
             outputSize: outputSize,
             displayedSourceSize: sourceSize,
-            sourceEstimatedBitRate: sourceRate,
-            exportFormat: .mp4
+            sourceEstimatedBitRate: sourceRate
         )
         let areaScale = Double(
             (outputSize.width * outputSize.height) / (sourceSize.width * sourceSize.height)
@@ -41,30 +40,21 @@ final class VideoRendererTests: XCTestCase {
             VideoRenderer.targetAverageBitRate(
                 outputSize: CGSize(width: 360, height: 720),
                 displayedSourceSize: CGSize(width: 320, height: 640),
-                sourceEstimatedBitRate: 0,
-                exportFormat: .mp4
+                sourceEstimatedBitRate: 0
             ),
             8_000_000
         )
     }
 
-    func testMOVTargetBitRateUsesHighDetailQualityFloor() {
-        let outputSize = CGSize(width: 1_350, height: 2_760)
-        let movRate = VideoRenderer.targetAverageBitRate(
-            outputSize: outputSize,
+    func testTargetBitRateNeverDropsBelowSourceRate() {
+        let sourceRate = 24_000_000.0
+        let targetRate = VideoRenderer.targetAverageBitRate(
+            outputSize: CGSize(width: 1_000, height: 2_000),
             displayedSourceSize: CGSize(width: 1_206, height: 2_622),
-            sourceEstimatedBitRate: 10_000_000,
-            exportFormat: .mov
-        )
-        let mp4Rate = VideoRenderer.targetAverageBitRate(
-            outputSize: outputSize,
-            displayedSourceSize: CGSize(width: 1_206, height: 2_622),
-            sourceEstimatedBitRate: 10_000_000,
-            exportFormat: .mp4
+            sourceEstimatedBitRate: sourceRate
         )
 
-        XCTAssertGreaterThanOrEqual(movRate, Int((outputSize.width * outputSize.height * 12).rounded(.up)))
-        XCTAssertGreaterThan(movRate, mp4Rate)
+        XCTAssertGreaterThanOrEqual(targetRate, Int((sourceRate * 1.1).rounded(.up)))
     }
 
     func testMP4ExportKeepsDurationAndUsesH264() async throws {

@@ -127,8 +127,7 @@ final class VideoRenderer: @unchecked Sendable {
         let averageBitRate = Self.targetAverageBitRate(
             outputSize: geometry.outputSize,
             displayedSourceSize: videoComposition.renderSize,
-            sourceEstimatedBitRate: Double(videoTrack.estimatedDataRate),
-            exportFormat: settings.exportFormat
+            sourceEstimatedBitRate: Double(videoTrack.estimatedDataRate)
         )
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: codec,
@@ -306,23 +305,17 @@ final class VideoRenderer: @unchecked Sendable {
     static func targetAverageBitRate(
         outputSize: CGSize,
         displayedSourceSize: CGSize,
-        sourceEstimatedBitRate: Double,
-        exportFormat: ExportFormat
+        sourceEstimatedBitRate: Double
     ) -> Int {
         let outputPixels = max(1, Double(outputSize.width * outputSize.height))
         let sourcePixels = max(1, Double(displayedSourceSize.width * displayedSourceSize.height))
-        let isMOV = exportFormat == .mov
-        let minimumRate = isMOV ? 16_000_000 : 8_000_000
-        let bitsPerPixel = isMOV ? 12.0 : 5.0
-        let sourceHeadroom = isMOV ? 1.5 : 1.1
-        let qualityFloor = max(minimumRate, Int((outputPixels * bitsPerPixel).rounded(.up)))
+        let qualityFloor = max(8_000_000, Int((outputPixels * 5).rounded(.up)))
         guard sourceEstimatedBitRate > 0 else { return qualityFloor }
 
         // Retain at least the source rate and scale it when the frame/background
-        // increases the encoded pixel area. MOV receives extra headroom so HEVC
-        // preserves the device artwork's fine highlights and antialiased edges.
+        // increases the encoded pixel area. The small headroom offsets VBR drift.
         let areaScale = max(1, outputPixels / sourcePixels)
-        let sourcePreservingRate = Int((sourceEstimatedBitRate * areaScale * sourceHeadroom).rounded(.up))
+        let sourcePreservingRate = Int((sourceEstimatedBitRate * areaScale * 1.1).rounded(.up))
         return max(qualityFloor, sourcePreservingRate)
     }
 }

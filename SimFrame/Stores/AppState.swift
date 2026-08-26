@@ -22,6 +22,7 @@ final class AppState {
     var settings = RenderSettings()
     var previewImage: NSImage?
     var selectedFrameImage: NSImage?
+    var selectedFrameMaskImage: NSImage?
     var videoPlayer: AVPlayer?
     var recentCaptures: [RecentCaptureRecord] = []
     var isImportingFrames = false
@@ -364,10 +365,12 @@ final class AppState {
     private func loadSelectedFrameImage() async {
         guard let frame = selectedFrame else {
             selectedFrameImage = nil
+            selectedFrameMaskImage = nil
             return
         }
         let url = await libraryService.frameURL(for: frame)
         selectedFrameImage = NSImage(contentsOf: url)
+        selectedFrameMaskImage = try? imageRenderer.screenApertureMask(frameURL: url, frame: frame)
     }
 
     private func present(_ error: Error) {

@@ -95,7 +95,17 @@ struct DropPreviewView: View {
 
                     StableVideoPlayer(player: player)
                         .frame(width: geometry.screenRect.width * scale, height: geometry.screenRect.height * scale)
-                        .clipped()
+                        .mask {
+                            if let mask = state.selectedFrameMaskImage {
+                                Image(nsImage: mask)
+                                    .resizable()
+                                    .interpolation(.high)
+                            } else {
+                                RoundedRectangle(
+                                    cornerRadius: min(geometry.screenRect.width, geometry.screenRect.height) * 0.18 * scale
+                                )
+                            }
+                        }
                         .position(
                             x: origin.x + geometry.screenRect.midX * scale,
                             y: origin.y + geometry.screenRect.midY * scale

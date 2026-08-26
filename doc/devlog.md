@@ -219,3 +219,34 @@ Append project changes to this file in chronological order. See `current.md` for
 
 - The user should visually inspect a representative transparent MOV export because the local high-resolution HEVC with Alpha integration test did not complete in a practical test time.
 - Higher MOV quality can increase output size and encoding duration.
+
+## 2026-08-26 — Corrected Rounded Clipping and Restored Source Bitrate Policy
+
+### Change Summary
+
+- Corrected the screen mask to carry the inverse frame alpha in its alpha channel and composited captures with `CIBlendWithAlphaMask`.
+- Applied the same frame-derived rounded mask to the native video preview, which previously remained rectangular even though export composition had a mask.
+- Generated and retained the selected frame's preview mask when the device frame changes.
+- Removed the previous MOV-specific bitrate increase and restored the source-quality-density policy for all video formats: at least the source bitrate with 10% VBR headroom when source metadata is available.
+- Replaced the mask-only test with a final-composition pixel test and added explicit coverage that the target video bitrate never drops below the source rate.
+
+### Affected Files
+
+- `SimFrame/Services/ImageRenderer.swift`
+- `SimFrame/Services/VideoRenderer.swift`
+- `SimFrame/Stores/AppState.swift`
+- `SimFrame/Views/DropPreviewView.swift`
+- `SimFrameTests/ImageRendererTests.swift`
+- `SimFrameTests/VideoRendererTests.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran 10 focused image and standard video regression tests with `xcodebuild`; all 10 passed with 0 failures.
+- Passing coverage included final rounded-corner alpha pixels, preview-mask dimensions, PNG output, MP4 H.264 export, video orientation, native-player hosting, bitrate fallback, larger-canvas bitrate density, and the explicit source-bitrate floor.
+- The app and test targets compiled successfully. Existing AVFoundation deprecation warnings remain.
+
+### Risks or Follow-up Work
+
+- End-to-end rounded-corner appearance with the user's imported frame remains a manual UI check.

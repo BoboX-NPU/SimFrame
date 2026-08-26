@@ -47,6 +47,19 @@ final class ImageRenderer: @unchecked Sendable {
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 
+    func screenApertureMask(frameURL: URL, frame: DeviceFrame) throws -> NSImage {
+        guard let frameImage = CIImage(contentsOf: frameURL, options: [.applyOrientationProperty: true]) else {
+            throw SimFrameError.invalidFrame("Unable to decode the selected frame")
+        }
+        let geometry = CompositionGeometry(frame: frame, preset: .original)
+        let preparedFrame = CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
+        let screenBounds = geometry.coreImageRect(fromTopLeft: geometry.screenRect)
+        guard let mask = context.createCGImage(preparedFrame.apertureMask, from: screenBounds) else {
+            throw SimFrameError.invalidFrame("Unable to create the screen aperture mask")
+        }
+        return NSImage(cgImage: mask, size: NSSize(width: mask.width, height: mask.height))
+    }
+
     func writePNG(_ image: CGImage, to destination: URL) throws {
         let temporaryURL = FileManager.default.temporaryDirectory.appendingPathComponent(
             "SimFrame-\(UUID().uuidString).png"
@@ -94,10 +107,10 @@ enum CompositionRenderer {
         let targetScreen = geometry.coreImageRect(fromTopLeft: geometry.screenRect)
         let apertureMask = placedFrame
             .applyingFilter("CIColorMatrix", parameters: [
-                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: -1),
-                "inputGVector": CIVector(x: 0, y: 0, z: 0, w: -1),
-                "inputBVector": CIVector(x: 0, y: 0, z: 0, w: -1),
-                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: -1),
                 "inputBiasVector": CIVector(x: 1, y: 1, z: 1, w: 1)
             ])
             .cropped(to: targetScreen)
@@ -155,7 +168,7 @@ enum CompositionRenderer {
         let transparentScreen = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0))
             .cropped(to: targetScreen)
         placedContent = placedContent
-            .applyingFilter("CIBlendWithMask", parameters: [
+            .applyingFilter("CIBlendWithAlphaMask", parameters: [
                 kCIInputBackgroundImageKey: transparentScreen,
                 "inputMaskImage": preparedFrame.apertureMask
             ])
