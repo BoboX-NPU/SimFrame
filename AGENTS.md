@@ -31,9 +31,12 @@ Improvements
 - xxx
 
 Bug Fixes
+
+- xxx
 ```
 - Stage only files that belong to the completed change. Review the staged diff before committing.
 - Do not claim validation, features, improvements, or fixes that were not actually completed.
+- Populate `Bug Fixes` only with bugs actually fixed in the current change. Describe each fix specifically, never use a generic fallback, and leave the section empty when no bug was fixed.
 
 ## Documentation Maintenance Rules
 

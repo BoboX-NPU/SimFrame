@@ -119,3 +119,26 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - None.
+
+## 2026-08-26 — Required Evidence-Based Bug-Fix Entries
+
+### Change Summary
+
+- Required every Bug Fixes entry to describe a bug actually fixed in the current change.
+- Added a specific placeholder to the template while preserving the rule that the section remains empty when no bug was fixed.
+- Prohibited generic fallback claims in the Bug Fixes section.
+
+### Affected Files
+
+- `AGENTS.md`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Reviewed the commit-message instructions and confirmed that Bug Fixes entries are tied to actual completed fixes.
+- Application code was unchanged. Build and tests were not run.
+
+### Risks or Follow-up Work
+
+- None.
