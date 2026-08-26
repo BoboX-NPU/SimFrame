@@ -97,3 +97,25 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - The initial commit establishes the complete current project baseline.
+
+## 2026-08-26 — Removed the Generic Bug-Fix Claim
+
+### Change Summary
+
+- Removed `Various bug fixes and performance improvements` from the Git commit template.
+- Specified that a commit section remains empty when no corresponding change applies.
+
+### Affected Files
+
+- `AGENTS.md`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Confirmed that the generic bug-fix line is no longer present in the working project documentation.
+- Application code was unchanged. Build and tests were not run.
+
+### Risks or Follow-up Work
+
+- None.

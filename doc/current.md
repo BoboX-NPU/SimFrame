@@ -16,7 +16,7 @@ SimFrame is a local-first macOS utility that composites iOS Simulator screenshot
 - Bundle identifier: `com.xuemingbo.SimFrame`
 - Security: App Sandbox and Hardened Runtime are enabled
 - Project collaboration documentation is maintained in English.
-- Every completed project update refreshes `doc/current.md`, appends `doc/devlog.md`, and ends with a Git commit using a short English title and the required New Features, Improvements, and Bug Fixes sections.
+- Every completed project update refreshes `doc/current.md`, appends `doc/devlog.md`, and ends with a Git commit using a short English title and the required New Features, Improvements, and Bug Fixes sections. Sections with no applicable changes remain empty.
 
 ## Implemented Capabilities
 
@@ -55,7 +55,7 @@ SimFrame is a local-first macOS utility that composites iOS Simulator screenshot
 
 - The project contains 14 unit tests and 1 UI test covering frame scanning and replacement, device matching, PNG composition, canvas behavior, video orientation, codecs, audio, transparency, and target bitrate.
 - Standard test command: `xcodebuild -project SimFrame.xcodeproj -scheme SimFrame -destination 'platform=macOS' test`
-- This update added the Git commit workflow to the project documentation. Build and tests were not run.
+- This update removed the generic bug-fix claim from the commit template. Build and tests were not run.
 
 ## Outstanding Work
 

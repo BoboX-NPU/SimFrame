@@ -19,7 +19,7 @@ Any change to code, configuration, scripts, tests, resources, or project documen
 ## Git Commit Format
 
 - Use a short, simple English title that summarizes the change.
-- Use the following English template for every commit message body, replacing `xxx` with concise descriptions:
+- Use the following English template for every commit message body, replacing `xxx` with concise descriptions and leaving a section empty when nothing applies:
 
 ```text
 New Features
@@ -31,8 +31,6 @@ Improvements
 - xxx
 
 Bug Fixes
-
-- Various bug fixes and performance improvements
 ```
 - Stage only files that belong to the completed change. Review the staged diff before committing.
 - Do not claim validation, features, improvements, or fixes that were not actually completed.
