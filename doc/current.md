@@ -16,7 +16,7 @@ SimFrame is a local-first macOS utility that composites iOS Simulator screenshot
 - Bundle identifier: `com.xuemingbo.SimFrame`
 - Security: App Sandbox and Hardened Runtime are enabled
 - Project collaboration documentation is maintained in English.
-- Every completed project update refreshes `doc/current.md`, appends `doc/devlog.md`, and ends with a Git commit using a short English title and the required New Features, Improvements, and Bug Fixes sections. Each Bug Fixes entry describes a fix actually completed in that change; the section remains empty when no bug was fixed.
+- Every completed project update refreshes `doc/current.md`, appends `doc/devlog.md`, and ends with a Git commit using a short English title. The body includes only the applicable `New Features`, `Improvements`, and `Bug Fixes` sections; empty sections and headings are omitted. Each `Bug Fixes` entry describes a fix actually completed in that change.
 
 ## Implemented Capabilities
 

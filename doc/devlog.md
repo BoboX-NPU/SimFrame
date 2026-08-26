@@ -165,3 +165,26 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - End-to-end pointer interaction with a user-imported frame and recording remains a manual UI check.
+
+## 2026-08-26 — Omitted Empty Commit-Message Sections
+
+### Change Summary
+
+- Changed the Git commit format so `New Features`, `Improvements`, and `Bug Fixes` headings appear only when they contain at least one completed item.
+- Removed the previous requirement to retain empty sections in every commit body.
+- Kept the evidence requirement for every included `Bug Fixes` entry.
+
+### Affected Files
+
+- `AGENTS.md`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Reviewed the Git commit instructions and confirmed that they explicitly require empty headings to be omitted.
+- Application build and tests were not run because application code was unchanged.
+
+### Risks or Follow-up Work
+
+- Existing commit messages are unchanged; the new format applies to this and future commits.

@@ -19,7 +19,7 @@ Any change to code, configuration, scripts, tests, resources, or project documen
 ## Git Commit Format
 
 - Use a short, simple English title that summarizes the change.
-- Use the following English template for every commit message body, replacing `xxx` with concise descriptions and leaving a section empty when nothing applies:
+- Use one or more of the following English sections in the commit message body, replacing `xxx` with concise descriptions:
 
 ```text
 New Features
@@ -34,9 +34,10 @@ Bug Fixes
 
 - xxx
 ```
+- Include only sections that contain at least one completed item. Omit an empty section and its heading entirely.
 - Stage only files that belong to the completed change. Review the staged diff before committing.
 - Do not claim validation, features, improvements, or fixes that were not actually completed.
-- Populate `Bug Fixes` only with bugs actually fixed in the current change. Describe each fix specifically, never use a generic fallback, and leave the section empty when no bug was fixed.
+- Populate `Bug Fixes` only with bugs actually fixed in the current change. Describe each fix specifically and never use a generic fallback.
 
 ## Documentation Maintenance Rules
 
