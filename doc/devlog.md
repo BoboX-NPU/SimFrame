@@ -250,3 +250,37 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - End-to-end rounded-corner appearance with the user's imported frame remains a manual UI check.
+
+## 2026-08-31 — Prevented Rounded Export Edge Gaps
+
+### Change Summary
+
+- Replaced the rectangular inverse-alpha mask with a central-aperture mask isolated from the device frame's full alpha channel.
+- Expanded the isolated screen aperture by two final-output pixels, cropped it to `screenRect`, and retained the device-frame artwork as the final top layer so capture pixels extend beneath the bezel without exposing a seam.
+- Excluded transparency connected to the outer frame boundary so rounded device corners remain clean even when the aperture bounding rectangle contains exterior-transparent pixels.
+- Reused the prepared aperture mask for PNG composition, per-frame MOV composition, and video preview without changing public APIs, backgrounds, canvas presets, bitrate policy, codecs, or audio handling.
+- Added synthetic final-PNG and encoded transparent-MOV pixel regressions plus an optional full-resolution regression using the locally imported iPhone 17 Pro Max frame.
+
+### Affected Files
+
+- `SimFrame/Services/ImageRenderer.swift`
+- `SimFrame/Services/VideoRenderer.swift`
+- `SimFrameTests/ImageRendererTests.swift`
+- `SimFrameTests/TestImageFactory.swift`
+- `SimFrameTests/VideoRendererTests.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran 17 reproducible unit and media tests with `xcodebuild`; all 17 passed with 0 failures. The command excluded only the local 30-frame library scan and the local high-resolution HEVC with Alpha audio fixture.
+- Ran four focused rounded-edge regressions; all four passed with 0 failures. They covered the exact two-pixel overlap, final synthetic PNG pixels, a full-resolution 1470 x 3000 PNG rendered with the locally imported iPhone 17 Pro Max Cosmic Orange frame, and alpha pixels read from an encoded short transparent MOV.
+- Ran `./script/build_and_run.sh --verify`; the build succeeded and the updated app process was verified.
+- Started a full test invocation, but interrupted it after the local 30-frame Apple library scan made no progress within a practical validation time. The high-resolution HEVC with Alpha local-fixture test was therefore not completed and is not recorded as passing.
+- A separate UI-test attempt failed before executing the test because Xcode timed out while enabling automation mode.
+- Existing AVFoundation deprecation warnings remain.
+
+### Risks or Follow-up Work
+
+- A post-fix visual inspection of PNG, transparent MOV, and video preview remains pending because the Mac was locked during the final UI validation attempt.
+- The high-resolution HEVC with Alpha local-fixture test still needs a practical completion window before it can be recorded as passing.

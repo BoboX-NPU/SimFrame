@@ -70,7 +70,7 @@ final class ImageRendererTests: XCTestCase {
         XCTAssertEqual(alpha(image, x: 0, y: 0), 0)
     }
 
-    func testRoundedScreenMaskClipsCompositedCaptureCorners() throws {
+    func testRoundedScreenMaskOverlapsUnderFrameWithoutLeakingIntoCorners() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -79,12 +79,13 @@ final class ImageRendererTests: XCTestCase {
         let frame = try FrameScanner.scan(url: frameURL)
         let geometry = CompositionGeometry(frame: frame, preset: .original)
         let frameImage = try XCTUnwrap(CIImage(contentsOf: frameURL))
-        let prepared = CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
+        let prepared = try CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
         let screenBounds = geometry.coreImageRect(fromTopLeft: geometry.screenRect)
         let maskImage = try XCTUnwrap(CIContext().createCGImage(prepared.apertureMask, from: screenBounds))
         let previewMask = try ImageRenderer().screenApertureMask(frameURL: frameURL, frame: frame)
 
         XCTAssertLessThan(alpha(maskImage, x: 2, y: 2), 8)
+        XCTAssertGreaterThan(alpha(maskImage, x: 13, y: 13), 247)
         XCTAssertGreaterThan(alpha(maskImage, x: maskImage.width / 2, y: maskImage.height / 2), 247)
         XCTAssertEqual(previewMask.size, frame.screenRect.size)
 
@@ -107,8 +108,84 @@ final class ImageRendererTests: XCTestCase {
         let cornerX = Int(geometry.screenRect.minX) + 2
         let cornerY = Int(geometry.screenRect.minY) + 2
         XCTAssertLessThan(alpha(outputImage, x: cornerX, y: cornerY), 8)
+        let overlapX = Int(geometry.screenRect.minX) + 13
+        let overlapY = Int(geometry.screenRect.minY) + 13
+        XCTAssertGreaterThan(alpha(outputImage, x: overlapX, y: overlapY), 247)
         XCTAssertGreaterThan(
             alpha(outputImage, x: Int(geometry.screenRect.midX), y: Int(geometry.screenRect.midY)),
+            247
+        )
+    }
+
+    func testRoundedPNGOutputKeepsOuterCornersTransparent() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let frameURL = directory.appendingPathComponent("Rounded Phone - Black - Portrait.png")
+        let contentURL = directory.appendingPathComponent("capture.png")
+        let destinationURL = directory.appendingPathComponent("framed.png")
+        try TestImageFactory.writeFrame(
+            to: frameURL,
+            screenCornerRadius: 48,
+            deviceCornerRadius: 110
+        )
+        try TestImageFactory.writeCapture(to: contentURL)
+        let frame = try FrameScanner.scan(url: frameURL)
+        let renderer = ImageRenderer()
+        let image = try renderer.render(
+            contentURL: contentURL,
+            frameURL: frameURL,
+            frame: frame,
+            settings: RenderSettings(frameID: frame.id)
+        )
+
+        try renderer.writePNG(image, to: destinationURL)
+
+        let outputImage = TestImageFactory.image(at: destinationURL)
+        XCTAssertLessThan(alpha(outputImage, x: 0, y: 0), 8)
+        XCTAssertLessThan(alpha(outputImage, x: 20, y: 40), 8)
+        XCTAssertGreaterThan(alpha(outputImage, x: 33, y: 53), 247)
+        XCTAssertGreaterThan(alpha(outputImage, x: outputImage.width / 2, y: outputImage.height / 2), 247)
+    }
+
+    func testLocalIPhone17ProMaxFrameKeepsRoundedOuterCornersCleanWhenFixturesExist() throws {
+        let libraryURL = URL(fileURLWithPath: "/Users/xuemingbo/Library/Containers/com.xuemingbo.SimFrame/Data/Library/Application Support/SimFrame/FrameLibrary")
+        let frameURL = libraryURL.appendingPathComponent("Frames/iphone-17-pro-max-cosmic-orange-portrait.png")
+        let manifestURL = libraryURL.appendingPathComponent("manifest.json")
+        guard FileManager.default.fileExists(atPath: frameURL.path),
+              FileManager.default.fileExists(atPath: manifestURL.path) else {
+            throw XCTSkip("Local iPhone 17 Pro Max frame fixture is unavailable")
+        }
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let contentURL = directory.appendingPathComponent("capture.png")
+        let destinationURL = directory.appendingPathComponent("iphone-17-pro-max.png")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(FrameLibraryManifest.self, from: Data(contentsOf: manifestURL))
+        let frame = try XCTUnwrap(manifest.frames.first {
+            $0.id == "iphone-17-pro-max-cosmic-orange-portrait"
+        })
+        try TestImageFactory.writeCapture(to: contentURL, size: frame.screenRect.size)
+        let renderer = ImageRenderer()
+        let image = try renderer.render(
+            contentURL: contentURL,
+            frameURL: frameURL,
+            frame: frame,
+            settings: RenderSettings(frameID: frame.id)
+        )
+
+        try renderer.writePNG(image, to: destinationURL)
+
+        let outputImage = TestImageFactory.image(at: destinationURL)
+        let screenRect = frame.screenRect.integral
+        XCTAssertLessThan(alpha(outputImage, x: 0, y: 0), 8)
+        XCTAssertLessThan(alpha(outputImage, x: Int(screenRect.minX), y: Int(screenRect.minY)), 8)
+        XCTAssertLessThan(alpha(outputImage, x: Int(screenRect.maxX) - 1, y: Int(screenRect.maxY) - 1), 8)
+        XCTAssertGreaterThan(
+            alpha(outputImage, x: Int(screenRect.midX), y: Int(screenRect.midY)),
             247
         )
     }

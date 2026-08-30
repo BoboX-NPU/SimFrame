@@ -23,7 +23,7 @@ final class ImageRenderer: @unchecked Sendable {
             throw SimFrameError.unsupportedFile
         }
         let geometry = CompositionGeometry(frame: frame, preset: settings.canvasPreset)
-        let preparedFrame = CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
+        let preparedFrame = try CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
         let output = CompositionRenderer.composite(
             content: content,
             preparedFrame: preparedFrame,
@@ -52,7 +52,7 @@ final class ImageRenderer: @unchecked Sendable {
             throw SimFrameError.invalidFrame("Unable to decode the selected frame")
         }
         let geometry = CompositionGeometry(frame: frame, preset: .original)
-        let preparedFrame = CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
+        let preparedFrame = try CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
         let screenBounds = geometry.coreImageRect(fromTopLeft: geometry.screenRect)
         guard let mask = context.createCGImage(preparedFrame.apertureMask, from: screenBounds) else {
             throw SimFrameError.invalidFrame("Unable to create the screen aperture mask")
@@ -88,12 +88,15 @@ final class ImageRenderer: @unchecked Sendable {
 }
 
 enum CompositionRenderer {
+    private static let apertureOverlapRadius: CGFloat = 2
+    private static let maskContext = CIContext(options: [.cacheIntermediates: false])
+
     struct PreparedFrame {
         let artwork: CIImage
         let apertureMask: CIImage
     }
 
-    static func prepareFrame(_ frame: CIImage, geometry: CompositionGeometry) -> PreparedFrame {
+    static func prepareFrame(_ frame: CIImage, geometry: CompositionGeometry) throws -> PreparedFrame {
         let targetFrame = geometry.coreImageRect(fromTopLeft: geometry.frameRect)
         let normalizedFrame = normalize(frame)
         let frameScaleX = targetFrame.width / max(normalizedFrame.extent.width, 1)
@@ -105,15 +108,7 @@ enum CompositionRenderer {
         ))
 
         let targetScreen = geometry.coreImageRect(fromTopLeft: geometry.screenRect)
-        let apertureMask = placedFrame
-            .applyingFilter("CIColorMatrix", parameters: [
-                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: -1),
-                "inputBiasVector": CIVector(x: 1, y: 1, z: 1, w: 1)
-            ])
-            .cropped(to: targetScreen)
+        let apertureMask = try isolatedApertureMask(from: placedFrame, in: targetScreen)
         return PreparedFrame(artwork: placedFrame, apertureMask: apertureMask)
     }
 
@@ -122,8 +117,8 @@ enum CompositionRenderer {
         frame: CIImage,
         geometry: CompositionGeometry,
         background: RenderBackground
-    ) -> CIImage {
-        composite(
+    ) throws -> CIImage {
+        try composite(
             content: content,
             preparedFrame: prepareFrame(frame, geometry: geometry),
             geometry: geometry,
@@ -199,5 +194,200 @@ enum CompositionRenderer {
             translationX: -image.extent.minX,
             y: -image.extent.minY
         ))
+    }
+
+    private static func isolatedApertureMask(from frame: CIImage, in screenRect: CGRect) throws -> CIImage {
+        let inspectionBounds = frame.extent.integral
+        let width = Int(inspectionBounds.width.rounded())
+        let height = Int(inspectionBounds.height.rounded())
+        guard width > 0, height > 0,
+              let frameImage = maskContext.createCGImage(frame, from: inspectionBounds) else {
+            throw SimFrameError.invalidFrame("Unable to inspect the selected frame aperture")
+        }
+
+        let bytesPerRow = width * 4
+        var framePixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+        guard let frameContext = CGContext(
+            data: &framePixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw SimFrameError.invalidFrame("Unable to inspect the selected frame aperture")
+        }
+        frameContext.draw(frameImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let alpha = (0..<(width * height)).map { framePixels[$0 * 4 + 3] }
+
+        let localScreenCenter = CGPoint(
+            x: screenRect.midX - inspectionBounds.minX,
+            y: screenRect.midY - inspectionBounds.minY
+        )
+        guard let apertureSeed = nearestTransparentSeed(
+            alpha: alpha,
+            width: width,
+            height: height,
+            center: localScreenCenter
+        ) else {
+            throw SimFrameError.invalidFrame("Unable to isolate the selected frame aperture")
+        }
+        let aperture = connectedRegion(
+            alpha: alpha,
+            width: width,
+            height: height,
+            seeds: [apertureSeed],
+            maximumAlpha: 8
+        )
+        let exterior = connectedRegion(
+            alpha: alpha,
+            width: width,
+            height: height,
+            seeds: borderPixels(width: width, height: height),
+            maximumAlpha: 247
+        )
+
+        let apertureImage = try binaryMaskImage(flags: aperture, inverted: false, width: width, height: height)
+        let safeInteriorImage = try binaryMaskImage(flags: exterior, inverted: true, width: width, height: height)
+        let localBounds = CGRect(x: 0, y: 0, width: width, height: height)
+        let expandedAperture = apertureImage
+            .applyingFilter("CIMorphologyMaximum", parameters: [
+                kCIInputRadiusKey: apertureOverlapRadius
+            ])
+            .cropped(to: localBounds)
+        let transparent = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0))
+            .cropped(to: localBounds)
+        return expandedAperture
+            .applyingFilter("CIBlendWithAlphaMask", parameters: [
+                kCIInputBackgroundImageKey: transparent,
+                "inputMaskImage": safeInteriorImage
+            ])
+            .cropped(to: localBounds)
+            .transformed(by: CGAffineTransform(
+                translationX: inspectionBounds.minX,
+                y: inspectionBounds.minY
+            ))
+            .cropped(to: screenRect)
+    }
+
+    private static func binaryMaskImage(
+        flags: [UInt8],
+        inverted: Bool,
+        width: Int,
+        height: Int
+    ) throws -> CIImage {
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+        for index in flags.indices where (flags[index] == 0) == inverted {
+            let pixel = index * 4
+            pixels[pixel] = 255
+            pixels[pixel + 1] = 255
+            pixels[pixel + 2] = 255
+            pixels[pixel + 3] = 255
+        }
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let image = context.makeImage() else {
+            throw SimFrameError.invalidFrame("Unable to create the selected frame aperture mask")
+        }
+        return CIImage(cgImage: image)
+    }
+
+    private static func nearestTransparentSeed(
+        alpha: [UInt8],
+        width: Int,
+        height: Int,
+        center: CGPoint
+    ) -> Int? {
+        let centerX = min(max(Int(center.x.rounded()), 0), width - 1)
+        let centerY = min(max(Int(center.y.rounded()), 0), height - 1)
+        let maxRadius = min(width, height) / 4
+        for radius in 0...maxRadius {
+            let points = [
+                (centerX + radius, centerY), (centerX - radius, centerY),
+                (centerX, centerY + radius), (centerX, centerY - radius)
+            ]
+            for (x, y) in points where x >= 0 && x < width && y >= 0 && y < height {
+                let index = y * width + x
+                if alpha[index] <= 8 { return index }
+            }
+        }
+        return nil
+    }
+
+    private static func borderPixels(width: Int, height: Int) -> [Int] {
+        var pixels = [Int]()
+        pixels.reserveCapacity((width + height) * 2)
+        for x in 0..<width {
+            pixels.append(x)
+            pixels.append((height - 1) * width + x)
+        }
+        if height > 2 {
+            for y in 1..<(height - 1) {
+                pixels.append(y * width)
+                pixels.append(y * width + width - 1)
+            }
+        }
+        return pixels
+    }
+
+    private static func connectedRegion(
+        alpha: [UInt8],
+        width: Int,
+        height: Int,
+        seeds: [Int],
+        maximumAlpha: UInt8
+    ) -> [UInt8] {
+        var included = [UInt8](repeating: 0, count: width * height)
+        var queue = [Int]()
+        queue.reserveCapacity(width * height / 2)
+        for seed in seeds where included[seed] == 0 && alpha[seed] <= maximumAlpha {
+            included[seed] = 1
+            queue.append(seed)
+        }
+
+        var cursor = 0
+        while cursor < queue.count {
+            let index = queue[cursor]
+            cursor += 1
+            let x = index % width
+            let y = index / width
+            if x > 0 {
+                let neighbor = index - 1
+                if included[neighbor] == 0, alpha[neighbor] <= maximumAlpha {
+                    included[neighbor] = 1
+                    queue.append(neighbor)
+                }
+            }
+            if x + 1 < width {
+                let neighbor = index + 1
+                if included[neighbor] == 0, alpha[neighbor] <= maximumAlpha {
+                    included[neighbor] = 1
+                    queue.append(neighbor)
+                }
+            }
+            if y > 0 {
+                let neighbor = index - width
+                if included[neighbor] == 0, alpha[neighbor] <= maximumAlpha {
+                    included[neighbor] = 1
+                    queue.append(neighbor)
+                }
+            }
+            if y + 1 < height {
+                let neighbor = index + width
+                if included[neighbor] == 0, alpha[neighbor] <= maximumAlpha {
+                    included[neighbor] = 1
+                    queue.append(neighbor)
+                }
+            }
+        }
+        return included
     }
 }

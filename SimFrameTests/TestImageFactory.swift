@@ -9,11 +9,22 @@ enum TestImageFactory {
         to url: URL,
         canvas: CGSize = CGSize(width: 360, height: 720),
         screen: CGRect = CGRect(x: 20, y: 40, width: 320, height: 640),
-        screenCornerRadius: CGFloat = 0
+        screenCornerRadius: CGFloat = 0,
+        deviceCornerRadius: CGFloat = 0
     ) throws {
         let context = try bitmapContext(size: canvas)
         context.setFillColor(CGColor(gray: 0.12, alpha: 1))
-        context.fill(CGRect(origin: .zero, size: canvas))
+        if deviceCornerRadius > 0 {
+            context.addPath(CGPath(
+                roundedRect: CGRect(origin: .zero, size: canvas),
+                cornerWidth: deviceCornerRadius,
+                cornerHeight: deviceCornerRadius,
+                transform: nil
+            ))
+            context.fillPath()
+        } else {
+            context.fill(CGRect(origin: .zero, size: canvas))
+        }
         if screenCornerRadius > 0 {
             context.saveGState()
             context.setBlendMode(.clear)

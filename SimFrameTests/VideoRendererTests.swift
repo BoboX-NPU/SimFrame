@@ -141,6 +141,52 @@ final class VideoRendererTests: XCTestCase {
         }
     }
 
+    func testTransparentMOVKeepsRoundedOuterCornersClean() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let frameURL = directory.appendingPathComponent("Rounded Phone - Black - Portrait.png")
+        let sourceURL = directory.appendingPathComponent("source.mov")
+        let destinationURL = directory.appendingPathComponent("framed-alpha.mov")
+        try TestImageFactory.writeFrame(
+            to: frameURL,
+            canvas: CGSize(width: 180, height: 360),
+            screen: CGRect(x: 10, y: 20, width: 160, height: 320),
+            screenCornerRadius: 24,
+            deviceCornerRadius: 64
+        )
+        try await makeVideo(
+            at: sourceURL,
+            encodedSize: CGSize(width: 160, height: 320),
+            transform: .identity,
+            frameCount: 3
+        )
+        let frame = try FrameScanner.scan(url: frameURL)
+        var settings = RenderSettings(frameID: frame.id)
+        settings.exportFormat = .mov
+        settings.background = .transparent
+
+        try await VideoRenderer().render(
+            sourceURL: sourceURL,
+            destinationURL: destinationURL,
+            frameURL: frameURL,
+            frame: frame,
+            settings: settings,
+            job: VideoRenderJob(),
+            progress: { _ in }
+        )
+
+        let asset = AVURLAsset(url: destinationURL)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let descriptions = try await track.load(.formatDescriptions)
+        XCTAssertEqual(try XCTUnwrap(descriptions.first).mediaSubType.rawValue, kCMVideoCodecType_HEVC)
+        let outputImage = try await frameImage(from: destinationURL)
+        XCTAssertLessThan(rgba(outputImage, x: 0, y: 0).alpha, 8)
+        XCTAssertLessThan(rgba(outputImage, x: 10, y: 20).alpha, 8)
+        XCTAssertGreaterThan(rgba(outputImage, x: outputImage.width / 2, y: outputImage.height / 2).alpha, 247)
+    }
+
     func testLocalTransparentMOVPreservesAudioAndAlphaWhenFixturesExist() async throws {
         let frameURL = URL(fileURLWithPath: "/Users/xuemingbo/Downloads/PNG-iPhone-17/iPhone 17 Pro/iPhone 17 Pro - Deep Blue - Portrait.png")
         let sourceURL = URL(fileURLWithPath: "/Users/xuemingbo/Developer/SimFrame/LocalFixtures/iphone-17-pro-grid-short-with-audio.mov")
@@ -200,7 +246,12 @@ final class VideoRendererTests: XCTestCase {
         )
     }
 
-    private func makeVideo(at url: URL, encodedSize: CGSize, transform: CGAffineTransform) async throws {
+    private func makeVideo(
+        at url: URL,
+        encodedSize: CGSize,
+        transform: CGAffineTransform,
+        frameCount: Int = 15
+    ) async throws {
         let width = Int(encodedSize.width)
         let height = Int(encodedSize.height)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
@@ -223,7 +274,7 @@ final class VideoRendererTests: XCTestCase {
         XCTAssertTrue(writer.startWriting())
         writer.startSession(atSourceTime: .zero)
         let pool = try XCTUnwrap(adaptor.pixelBufferPool)
-        for index in 0..<15 {
+        for index in 0..<frameCount {
             while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(2)) }
             var buffer: CVPixelBuffer?
             XCTAssertEqual(CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer), kCVReturnSuccess)

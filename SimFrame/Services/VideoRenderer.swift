@@ -72,7 +72,7 @@ final class VideoRenderer: @unchecked Sendable {
         }
 
         let geometry = CompositionGeometry(frame: frame, preset: settings.canvasPreset)
-        let preparedFrame = CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
+        let preparedFrame = try CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
         let temporaryURL = FileManager.default.temporaryDirectory.appendingPathComponent(
             "SimFrame-\(UUID().uuidString).\(settings.exportFormat.fileExtension)"
         )
