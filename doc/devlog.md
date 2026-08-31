@@ -364,3 +364,26 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - None.
+
+## 2026-08-31 — Removed the Main Window Status Footer
+
+### Change Summary
+
+- Removed the persistent footer below the main workspace, including its status message, progress indicator, frame count, format label, and divider.
+- Preserved the preview, recent captures, inspector, toolbar actions, alerts, and underlying application state.
+
+### Affected Files
+
+- `SimFrame/Views/MainView.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran `./script/build_and_run.sh --verify`; the macOS app target built successfully, launched, and passed process verification.
+- Inspected the running SimFrame window with an existing video capture. The workspace ended at the recent-captures area with no footer, divider, status message, progress indicator, frame count, or format label.
+- Confirmed that the preview, playback controls, recent captures, inspector, and toolbar remained visible.
+
+### Risks or Follow-up Work
+
+- None.

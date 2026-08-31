@@ -18,8 +18,6 @@ struct MainView: View {
                 Divider()
                 RecentCapturesView(state: state)
             }
-            Divider()
-            statusBar
         }
         .inspector(isPresented: .constant(true)) {
             InspectorView(state: state)
@@ -52,27 +50,4 @@ struct MainView: View {
         }
     }
 
-    private var statusBar: some View {
-        HStack(spacing: 10) {
-            if state.isImportingFrames || state.isExporting {
-                ProgressView(value: state.isExporting ? state.exportProgress : nil)
-                    .controlSize(.small)
-                    .frame(width: 96)
-            }
-            Text(state.statusMessage)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer()
-            if let manifest = state.manifest {
-                Text("\(manifest.frames.count) frames · \(manifest.displayName)")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 30)
-    }
 }
-
