@@ -87,6 +87,9 @@ struct DropPreviewView: View {
                 )
                 let canvas = CGSize(width: geometry.outputSize.width * scale, height: geometry.outputSize.height * scale)
                 let origin = CGPoint(x: (proxy.size.width - canvas.width) / 2, y: (proxy.size.height - canvas.height) / 2)
+                let playbackControlsWidth = VideoPreviewLayout.playbackControlsWidth(
+                    availableWidth: proxy.size.width
+                )
 
                 ZStack(alignment: .topLeading) {
                     backgroundView
@@ -121,6 +124,13 @@ struct DropPreviewView: View {
                         .position(
                             x: origin.x + geometry.frameRect.midX * scale,
                             y: origin.y + geometry.frameRect.midY * scale
+                        )
+
+                    VideoPlaybackControls(player: player)
+                        .frame(width: playbackControlsWidth)
+                        .position(
+                            x: proxy.size.width / 2,
+                            y: VideoPreviewLayout.playbackControlsCenterY(availableHeight: proxy.size.height)
                         )
                 }
             }
@@ -169,7 +179,7 @@ struct StableVideoPlayer: NSViewRepresentable {
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
         view.player = player
-        view.controlsStyle = .floating
+        view.controlsStyle = .none
         view.videoGravity = .resizeAspectFill
         return view
     }
@@ -182,6 +192,141 @@ struct StableVideoPlayer: NSViewRepresentable {
     static func dismantleNSView(_ view: AVPlayerView, coordinator: Void) {
         view.player?.pause()
         view.player = nil
+    }
+}
+
+enum VideoPreviewLayout {
+    static let playbackControlsHorizontalInset: CGFloat = 24
+    static let playbackControlsBottomInset: CGFloat = 16
+    static let playbackControlsHeight: CGFloat = 44
+
+    static func playbackControlsWidth(availableWidth: CGFloat) -> CGFloat {
+        max(availableWidth - playbackControlsHorizontalInset * 2, 0)
+    }
+
+    static func playbackControlsCenterY(availableHeight: CGFloat) -> CGFloat {
+        max(
+            playbackControlsHeight / 2,
+            availableHeight - playbackControlsBottomInset - playbackControlsHeight / 2
+        )
+    }
+}
+
+struct VideoPlaybackControls: View {
+    let player: AVPlayer
+
+    @State private var currentTime = 0.0
+    @State private var duration = 0.0
+    @State private var isPlaying = false
+    @State private var isSeeking = false
+    @State private var isMuted = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: togglePlayback) {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 16)
+            }
+            .buttonStyle(.plain)
+            .help(isPlaying ? "Pause" : "Play")
+
+            Text(formattedTime(currentTime))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+
+            Slider(
+                value: Binding(
+                    get: { min(currentTime, max(duration, 0)) },
+                    set: { currentTime = $0 }
+                ),
+                in: 0...max(duration, 1),
+                onEditingChanged: handleSeeking
+            )
+            .disabled(duration <= 0)
+
+            Text(formattedTime(duration))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+
+            Button(action: toggleMute) {
+                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .frame(width: 18)
+            }
+            .buttonStyle(.plain)
+            .help(isMuted ? "Unmute" : "Mute")
+        }
+        .font(.caption)
+        .padding(.horizontal, 14)
+        .frame(height: VideoPreviewLayout.playbackControlsHeight)
+        .background(.regularMaterial, in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(.white.opacity(0.12))
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.24), radius: 8, y: 3)
+        .accessibilityIdentifier("video-playback-controls")
+        .task(id: ObjectIdentifier(player)) {
+            while !Task.isCancelled {
+                refreshPlaybackState()
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+    }
+
+    private func togglePlayback() {
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+            return
+        }
+
+        if duration > 0, currentTime >= duration - 0.05 {
+            currentTime = 0
+            player.seek(to: .zero)
+        }
+        player.play()
+        isPlaying = true
+    }
+
+    private func toggleMute() {
+        player.isMuted.toggle()
+        isMuted = player.isMuted
+    }
+
+    private func handleSeeking(_ editing: Bool) {
+        isSeeking = editing
+        guard !editing else { return }
+        player.seek(
+            to: CMTime(seconds: currentTime, preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
+    }
+
+    private func refreshPlaybackState() {
+        if !isSeeking {
+            let seconds = player.currentTime().seconds
+            currentTime = seconds.isFinite ? max(seconds, 0) : 0
+        }
+
+        let itemDuration = player.currentItem?.duration.seconds ?? 0
+        duration = itemDuration.isFinite ? max(itemDuration, 0) : 0
+        isPlaying = player.timeControlStatus == .playing
+        isMuted = player.isMuted
+    }
+
+    private func formattedTime(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let totalSeconds = Int(seconds.rounded(.down))
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let remainingSeconds = totalSeconds % 60
+
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, remainingSeconds)
+        }
+        return String(format: "%d:%02d", minutes, remainingSeconds)
     }
 }
 

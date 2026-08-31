@@ -27,7 +27,7 @@ SimFrame is a local-first macOS utility that composites iOS Simulator screenshot
 - Provides Original, Balanced, and Spacious canvas presets with transparent or solid backgrounds.
 - Previews, copies, and exports images as PNG. Mismatched aspect ratios use center cropping and display a warning. Image content is clipped by the central transparent aperture isolated from the selected frame's real alpha channel. The aperture expands by two final-output pixels inside `screenRect`, while border-connected exterior transparency is excluded so content overlaps beneath the bezel without leaking beyond the device.
 - Exports videos as MOV or MP4 with progress reporting and cancellation, while preserving an available audio track. Video frames use the same isolated, two-pixel-overlap aperture mask as still images, and device-frame artwork remains the final top layer.
-- Previews video with native `AVPlayerView` controls and the same isolated aperture mask used by export, while keeping overlaid device-frame artwork non-interactive so playback controls receive pointer input.
+- Previews video with a native `AVPlayerView` surface and the same isolated aperture mask used by export. Playback controls are a separate responsive overlay sized from the full preview area rather than the device screen aperture, with play/pause, seeking, elapsed and total time, and mute controls. Device-frame artwork remains non-interactive so the controls receive pointer input.
 - Uses HEVC with Alpha for transparent MOV, HEVC for opaque MOV, and H.264 for MP4. Video export normalizes source orientation and calculates the target bitrate from source bitrate and output pixel area. The target never falls below the source bitrate and includes 10% VBR headroom when source bitrate metadata is available.
 - Saves and restores recently opened capture files.
 - Includes a device-frame inspector for correcting the screen region of imported frames.
@@ -54,15 +54,16 @@ SimFrame is a local-first macOS utility that composites iOS Simulator screenshot
 
 ## Current Validation Status
 
-- The project contains 19 unit and media tests plus 1 UI test covering frame scanning and replacement, device matching, PNG composition, isolated alpha-derived rounded screen masking, two-pixel bezel overlap, canvas behavior, video orientation, codecs, audio, transparency, and target bitrate.
+- The project contains 20 unit and media tests plus 1 UI test covering frame scanning and replacement, device matching, PNG composition, isolated alpha-derived rounded screen masking, two-pixel bezel overlap, canvas behavior, preview-area playback-control sizing, video orientation, codecs, audio, transparency, and target bitrate.
 - Standard test command: `xcodebuild -project SimFrame.xcodeproj -scheme SimFrame -destination 'platform=macOS' test`
-- On 2026-08-31, 17 reproducible unit and media tests passed with 0 failures. The two excluded local-fixture tests were the 30-frame Apple library scan and the high-resolution HEVC with Alpha audio fixture.
+- On 2026-08-31, 18 reproducible unit and media tests passed with 0 failures. The two excluded local-fixture tests were the 30-frame Apple library scan and the high-resolution HEVC with Alpha audio fixture.
+- Two focused playback-preview tests passed with 0 failures. A running-app inspection confirmed that the control bar spans the available preview width, playback advances its time and slider state, and the video remains inside the device-frame aperture.
 - Four focused rounded-edge tests passed with 0 failures. They verify the two-pixel overlap, clean exterior corners in a final synthetic PNG, clean corners and visible center content in a full-resolution 1470 x 3000 PNG using a real iPhone 17 Pro Max frame, and alpha pixels read from an encoded transparent MOV frame.
 - `./script/build_and_run.sh --verify` completed successfully after the rendering changes.
 
 ## Outstanding Work
 
 - No confirmed functional blocker is currently known.
-- A post-fix visual UI inspection of PNG, transparent MOV, and video preview remains pending because the Mac became locked during the validation session. The shared mask paths and encoded-output pixel tests passed, but this manual check is not recorded as completed.
+- A post-fix visual UI inspection of PNG and transparent MOV remains pending because the Mac became locked during the earlier validation session. Video-preview layout and playback interaction were inspected successfully on 2026-08-31.
 - The full high-resolution HEVC with Alpha local-fixture test did not complete within a practical validation time and is not recorded as passing.
 - A full test invocation reached the local 30-frame Apple library scan but was interrupted after it made no progress within a practical validation time. A separate UI-test attempt timed out while enabling automation mode.

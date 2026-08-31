@@ -284,3 +284,30 @@ Append project changes to this file in chronological order. See `current.md` for
 
 - A post-fix visual inspection of PNG, transparent MOV, and video preview remains pending because the Mac was locked during the final UI validation attempt.
 - The high-resolution HEVC with Alpha local-fixture test still needs a practical completion window before it can be recorded as passing.
+
+## 2026-08-31 — Expanded Video Preview Controls to the Display Area
+
+### Change Summary
+
+- Separated video playback controls from the masked native player surface so control sizing no longer inherits the portrait device screen aperture width.
+- Sized the playback bar from the complete available preview width with fixed horizontal margins and responsive window resizing.
+- Added play/pause, seeking, elapsed and total time, and mute controls while preserving frame-derived video masking and non-interactive device-frame artwork.
+- Added regression coverage proving that playback-control width comes from the preview area rather than the device screen aperture.
+
+### Affected Files
+
+- `SimFrame/Views/DropPreviewView.swift`
+- `SimFrameTests/VideoRendererTests.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran two focused playback-preview tests with `xcodebuild`; both passed with 0 failures.
+- Ran 18 reproducible unit and media tests with `xcodebuild`; all 18 passed with 0 failures. The local 30-frame library scan and high-resolution HEVC with Alpha audio fixture were excluded.
+- Ran `./script/build_and_run.sh --verify`; the build succeeded and the updated app process was verified.
+- Inspected the running app with an iPhone 17 Pro Max portrait recording. The playback bar spanned the available preview area with 24-point horizontal margins, the video remained inside the screen aperture, and play/pause updated the elapsed time and slider position.
+
+### Risks or Follow-up Work
+
+- Pointer dragging of the seek slider and mute interaction remain manual checks; their controls compiled and were visible in the running app.
