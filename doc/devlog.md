@@ -311,3 +311,28 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - Pointer dragging of the seek slider and mute interaction remain manual checks; their controls compiled and were visible in the running app.
+
+## 2026-08-31 — Bounded the Video Preview Control Width
+
+### Change Summary
+
+- Added a 400-point minimum and 1,000-point maximum to the responsive video playback control width.
+- Preserved preview-area sizing between the two bounds and kept the existing 24-point horizontal inset calculation.
+- Extended the layout regression to cover the minimum, responsive intermediate, and maximum width cases.
+
+### Affected Files
+
+- `SimFrame/Views/DropPreviewView.swift`
+- `SimFrameTests/VideoRendererTests.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran the focused playback-control width test with `xcodebuild`; it passed with 0 failures and verified 400-point minimum, 952-point intermediate, and 1,000-point maximum results.
+- Ran 18 reproducible unit and media tests with `xcodebuild`; all 18 passed with 0 failures. The local 30-frame library scan and high-resolution HEVC with Alpha audio fixture were excluded.
+- Ran `./script/build_and_run.sh --verify`; the build succeeded and the updated app process was verified.
+
+### Risks or Follow-up Work
+
+- The exact 400-point and 1,000-point extremes were verified by layout regression rather than manual window-resize inspection.

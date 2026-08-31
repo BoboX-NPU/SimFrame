@@ -18,13 +18,15 @@ final class VideoRendererTests: XCTestCase {
         XCTAssertFalse(host.subviews.isEmpty)
     }
 
-    func testPlaybackControlsUsePreviewWidthInsteadOfScreenApertureWidth() {
+    func testPlaybackControlsUsePreviewWidthWithinMinimumAndMaximumBounds() {
         let previewWidth: CGFloat = 1_000
         let portraitScreenApertureWidth: CGFloat = 240
         let controlsWidth = VideoPreviewLayout.playbackControlsWidth(availableWidth: previewWidth)
 
+        XCTAssertEqual(VideoPreviewLayout.playbackControlsWidth(availableWidth: 300), 400)
         XCTAssertEqual(controlsWidth, 952)
         XCTAssertGreaterThan(controlsWidth, portraitScreenApertureWidth)
+        XCTAssertEqual(VideoPreviewLayout.playbackControlsWidth(availableWidth: 1_600), 1_000)
     }
 
     func testTargetBitRatePreservesSourceQualityAcrossLargerCanvas() {

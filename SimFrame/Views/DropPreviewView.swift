@@ -199,9 +199,15 @@ enum VideoPreviewLayout {
     static let playbackControlsHorizontalInset: CGFloat = 24
     static let playbackControlsBottomInset: CGFloat = 16
     static let playbackControlsHeight: CGFloat = 44
+    static let playbackControlsMinimumWidth: CGFloat = 400
+    static let playbackControlsMaximumWidth: CGFloat = 1_000
 
     static func playbackControlsWidth(availableWidth: CGFloat) -> CGFloat {
-        max(availableWidth - playbackControlsHorizontalInset * 2, 0)
+        let proposedWidth = availableWidth - playbackControlsHorizontalInset * 2
+        return min(
+            max(proposedWidth, playbackControlsMinimumWidth),
+            playbackControlsMaximumWidth
+        )
     }
 
     static func playbackControlsCenterY(availableHeight: CGFloat) -> CGFloat {
