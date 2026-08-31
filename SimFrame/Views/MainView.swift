@@ -33,11 +33,6 @@ struct MainView: View {
                 Button { state.chooseFrameLibrary() } label: {
                     Label("Frame Library", systemImage: "iphone.gen3")
                 }
-
-                Button { state.export() } label: {
-                    Label("Export", systemImage: "square.and.arrow.up")
-                }
-                .disabled(!state.canExport)
             }
         }
         .alert("SimFrame", isPresented: Binding(

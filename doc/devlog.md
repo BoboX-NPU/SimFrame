@@ -414,3 +414,27 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - None.
+
+## 2026-08-31 — Simplified the Main Toolbar
+
+### Change Summary
+
+- Removed the duplicate Export action from the top-right toolbar.
+- Kept the toolbar focused on opening capture media and selecting the device-frame library.
+- Preserved the Export action and format controls in the inspector.
+
+### Affected Files
+
+- `SimFrame/Views/MainView.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran `./script/build_and_run.sh --verify`; the macOS app target built successfully, launched, and passed process verification.
+- Inspected the running app's accessibility hierarchy and confirmed that the toolbar contains only Open Capture and Frame Library.
+- Confirmed that Export remains available in the inspector and no longer appears in the toolbar.
+
+### Risks or Follow-up Work
+
+- None.
