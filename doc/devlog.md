@@ -580,3 +580,29 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - The onboarding UI test remains blocked by the existing Xcode stale-process termination problem; the running app and import overlay were inspected directly instead.
+
+## 2026-08-31 — Rewrote the Project README in English and Chinese
+
+### Change Summary
+
+- Replaced the outdated minimal README with a complete English overview covering the fully local product model, core capabilities, requirements, first-run workflow, supported media and export formats, development commands, and current limitations.
+- Added a structurally matched Simplified Chinese README and reciprocal language links between both versions.
+- Linked the official Apple Design Resources and marketing guidelines while clarifying that Apple device artwork is not bundled with the app or stored in the repository.
+
+### Affected Files
+
+- `README.md`
+- `README.zh-CN.md`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Reviewed both README versions against the current implementation and `doc/current.md` for feature, format, platform, and workflow consistency.
+- Verified the reciprocal README links, local documentation links, repository clone URL, script names, Xcode project name, and scheme name.
+- Ran `git diff --check`; it completed without whitespace errors.
+- Build and tests: Not run because this change only updates Markdown documentation.
+
+### Risks or Follow-up Work
+
+- No application screenshots are currently stored in the repository, so the README does not include a visual preview.
