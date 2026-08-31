@@ -78,8 +78,12 @@ final class ImageRendererTests: XCTestCase {
         try TestImageFactory.writeFrame(to: frameURL, screenCornerRadius: 48)
         let frame = try FrameScanner.scan(url: frameURL)
         let geometry = CompositionGeometry(frame: frame, preset: .original)
-        let frameImage = try XCTUnwrap(CIImage(contentsOf: frameURL))
-        let prepared = try CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
+        let artwork = TestImageFactory.image(at: frameURL)
+        let assets = FrameRenderAssets(
+            artwork: artwork,
+            screenMask: try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
+        )
+        let prepared = CompositionRenderer.prepareFrame(assets: assets, geometry: geometry)
         let screenBounds = geometry.coreImageRect(fromTopLeft: geometry.screenRect)
         let maskImage = try XCTUnwrap(CIContext().createCGImage(prepared.apertureMask, from: screenBounds))
         let previewMask = try ImageRenderer().screenApertureMask(frameURL: frameURL, frame: frame)
@@ -115,6 +119,148 @@ final class ImageRendererTests: XCTestCase {
             alpha(outputImage, x: Int(geometry.screenRect.midX), y: Int(geometry.screenRect.midY)),
             247
         )
+    }
+
+    func testScreenMaskFillsDynamicIslandWhileArtworkStillCoversIt() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let frameURL = directory.appendingPathComponent("Island Phone - Black - Portrait.png")
+        let island = CGRect(x: 145, y: 70, width: 70, height: 24)
+        try TestImageFactory.writeFrame(
+            to: frameURL,
+            screenCornerRadius: 48,
+            screenOcclusions: [island]
+        )
+        let frame = try FrameScanner.scan(url: frameURL)
+        let artwork = TestImageFactory.image(at: frameURL)
+        let sourceIslandPixel = rgbaAtTopLeft(artwork, x: Int(island.midX), y: Int(island.midY))
+        XCTAssertLessThan(sourceIslandPixel.red, 32)
+        let mask = try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
+        let assets = FrameRenderAssets(artwork: artwork, screenMask: mask)
+        let geometry = CompositionGeometry(frame: frame, preset: .original)
+        let prepared = CompositionRenderer.prepareFrame(assets: assets, geometry: geometry)
+        let maskImage = try XCTUnwrap(CIContext().createCGImage(
+            prepared.apertureMask,
+            from: geometry.coreImageRect(fromTopLeft: geometry.screenRect)
+        ))
+
+        let localIslandCenterX = Int(island.midX - frame.screenRect.minX)
+        let localIslandCenterY = Int(frame.screenRect.maxY - island.midY)
+        XCTAssertGreaterThan(alpha(maskImage, x: localIslandCenterX, y: localIslandCenterY), 247)
+
+        let content = CIImage(color: CIColor(red: 1, green: 0, blue: 0, alpha: 1))
+            .cropped(to: CGRect(origin: .zero, size: frame.screenRect.size))
+        let output = CompositionRenderer.composite(
+            content: content,
+            preparedFrame: prepared,
+            geometry: geometry,
+            background: .transparent
+        )
+        let outputImage = try XCTUnwrap(CIContext().createCGImage(
+            output,
+            from: CGRect(origin: .zero, size: geometry.outputSize)
+        ))
+        let islandPixel = rgbaAtTopLeft(outputImage, x: Int(island.midX), y: Int(island.midY))
+        XCTAssertLessThan(islandPixel.red, 32)
+        XCTAssertLessThan(islandPixel.green, 32)
+        XCTAssertLessThan(islandPixel.blue, 32)
+    }
+
+    func testScreenMaskFillsNotchConnectedToTopBezel() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let frameURL = directory.appendingPathComponent("Notch Phone - Black - Portrait.png")
+        let notch = CGRect(x: 140, y: 40, width: 80, height: 42)
+        try TestImageFactory.writeFrame(
+            to: frameURL,
+            screenCornerRadius: 48,
+            screenOcclusions: [notch]
+        )
+        let frame = try FrameScanner.scan(url: frameURL)
+        let artwork = TestImageFactory.image(at: frameURL)
+        let mask = try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
+        let assets = FrameRenderAssets(artwork: artwork, screenMask: mask)
+        let image = try XCTUnwrap(CIContext().createCGImage(
+            CIImage(cgImage: mask),
+            from: CGRect(x: 0, y: 0, width: mask.width, height: mask.height)
+        ))
+
+        XCTAssertGreaterThan(
+            alpha(image, x: Int(notch.midX - frame.screenRect.minX), y: mask.height - 20),
+            247
+        )
+
+        let geometry = CompositionGeometry(frame: frame, preset: .original)
+        let content = CIImage(color: CIColor(red: 1, green: 0, blue: 0, alpha: 1))
+            .cropped(to: CGRect(origin: .zero, size: frame.screenRect.size))
+        let output = CompositionRenderer.composite(
+            content: content,
+            preparedFrame: CompositionRenderer.prepareFrame(assets: assets, geometry: geometry),
+            geometry: geometry,
+            background: .transparent
+        )
+        let outputImage = try XCTUnwrap(CIContext().createCGImage(
+            output,
+            from: CGRect(origin: .zero, size: geometry.outputSize)
+        ))
+        let notchPixel = rgbaAtTopLeft(outputImage, x: Int(notch.midX), y: Int(notch.midY))
+        XCTAssertLessThan(notchPixel.red, 32)
+        XCTAssertLessThan(notchPixel.green, 32)
+        XCTAssertLessThan(notchPixel.blue, 32)
+    }
+
+    func testPreviewSizeFitsViewportWithoutUpscaling() {
+        XCTAssertEqual(
+            ImageRenderer.previewPixelSize(
+                outputSize: CGSize(width: 1_470, height: 3_000),
+                maximumPixelSize: CGSize(width: 900, height: 1_200)
+            ),
+            CGSize(width: 588, height: 1_200)
+        )
+        XCTAssertEqual(
+            ImageRenderer.previewPixelSize(
+                outputSize: CGSize(width: 360, height: 720),
+                maximumPixelSize: CGSize(width: 2_000, height: 2_000)
+            ),
+            CGSize(width: 360, height: 720)
+        )
+    }
+
+    func testDisplayPreviewIsDownsampledWhileFullRenderKeepsOutputSize() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let frameURL = directory.appendingPathComponent("Test Phone - Black - Portrait.png")
+        let contentURL = directory.appendingPathComponent("capture.png")
+        try TestImageFactory.writeFrame(to: frameURL, screenCornerRadius: 48)
+        try TestImageFactory.writeCapture(to: contentURL)
+        let frame = try FrameScanner.scan(url: frameURL)
+        let artwork = TestImageFactory.image(at: frameURL)
+        let assets = FrameRenderAssets(
+            artwork: artwork,
+            screenMask: try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
+        )
+        let renderer = ImageRenderer()
+        let settings = RenderSettings(frameID: frame.id)
+
+        let preview = try renderer.preview(
+            contentURL: contentURL,
+            assets: assets,
+            frame: frame,
+            settings: settings,
+            maximumPixelSize: CGSize(width: 180, height: 180)
+        )
+        let fullResolution = try renderer.render(
+            contentURL: contentURL,
+            assets: assets,
+            frame: frame,
+            settings: settings
+        )
+
+        XCTAssertEqual(CGSize(width: preview.width, height: preview.height), CGSize(width: 90, height: 180))
+        XCTAssertEqual(CGSize(width: fullResolution.width, height: fullResolution.height), frame.canvasSize)
     }
 
     func testRoundedPNGOutputKeepsOuterCornersTransparent() throws {
@@ -201,5 +347,28 @@ final class ImageRendererTests: XCTestCase {
 
     private func blue(_ image: CGImage, x: Int, y: Int) -> UInt8 {
         bytes(image)[y * image.bytesPerRow + x * 4 + 2]
+    }
+
+    private func rgbaAtTopLeft(
+        _ image: CGImage,
+        x: Int,
+        y: Int
+    ) -> (red: UInt8, green: UInt8, blue: UInt8, alpha: UInt8) {
+        let bytesPerRow = image.width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * image.height)
+        let context = CGContext(
+            data: &pixels,
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.translateBy(x: 0, y: CGFloat(image.height))
+        context.scaleBy(x: 1, y: -1)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let index = y * bytesPerRow + x * 4
+        return (pixels[index], pixels[index + 1], pixels[index + 2], pixels[index + 3])
     }
 }

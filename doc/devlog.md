@@ -438,3 +438,47 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - None.
+
+## 2026-08-31 — Removed Device Frame Switching Stalls
+
+### Change Summary
+
+- Precomputed an alpha-derived outer-screen mask for every imported frame and added automatic repair for missing, corrupt, or dimensionally invalid masks in existing libraries without changing the manifest schema.
+- Filled Dynamic Island, notch, and camera occlusions inside the mask while preserving rounded exterior transparency and the two-pixel bezel overlap; device artwork remains the top layer that covers internal hardware regions.
+- Added a deterministic 128 MB decoded-byte LRU for frame artwork and masks, with complete invalidation after library replacement and per-frame invalidation after metadata edits.
+- Moved production frame loading, mask reads, still-preview rendering, full-resolution clipboard rendering, and Core Image output away from the main actor.
+- Added cancellable frame-load, preview, copy, and resize-debounce tasks plus request-generation checks so stale work cannot replace the latest selection.
+- Rendered still-image previews to the actual viewport pixel size after a 150 ms resize debounce without upscaling, while retaining full resolution for PNG export and clipboard copy.
+- Updated image, video-preview, and video-export paths to share the same decoded artwork and precomputed mask.
+
+### Affected Files
+
+- `SimFrame/App/SimFrameApp.swift`
+- `SimFrame/Models/Models.swift`
+- `SimFrame/Services/FrameLibraryService.swift`
+- `SimFrame/Services/ImageRenderer.swift`
+- `SimFrame/Services/VideoRenderer.swift`
+- `SimFrame/Stores/AppState.swift`
+- `SimFrame/Views/DropPreviewView.swift`
+- `SimFrame/Views/InspectorView.swift`
+- `SimFrameTests/DeviceDetectorTests.swift`
+- `SimFrameTests/FrameLibraryTests.swift`
+- `SimFrameTests/ImageRendererTests.swift`
+- `SimFrameTests/TestImageFactory.swift`
+- `SimFrameTests/VideoRendererTests.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran all 28 unit and media tests with `xcodebuild`; all 28 passed with 0 failures in 81.481 seconds. The run included the local 30-frame scan, full-resolution iPhone 17 Pro Max PNG, transparent MOV, audio, codec, bitrate, Dynamic Island, connected-notch, cache-repair, viewport-size, and stale-request regressions.
+- Ran the full macOS test command. All 28 unit and media tests passed, but the onboarding UI test failed its three element assertions because the automation-launched app process did not create a window. Rerunning the UI test alone produced the same environment-specific result.
+- Ran `./script/build_and_run.sh --verify` after the final observation fix; the target built, launched, and passed process verification.
+- Inspected the running app with real PNG and video captures. The existing library automatically reached 30 valid masks, rounded clipping remained clean, Dynamic Island was covered by the top-layer artwork, full-resolution Copy became enabled after assets loaded, rapid Device and Variant changes settled on the latest selection, and window zoom and restore preserved a ready preview.
+- Captured an eight-second rapid-switch `sample`. The main thread contained no screen-alpha flood-fill, mask generation, or full-resolution Core Image output; observed PNG decoding ran on SwiftUI's background `prepare-image` queue.
+- Existing AVFoundation deprecation warnings remain.
+
+### Risks or Follow-up Work
+
+- The onboarding UI test needs reevaluation when the macOS 27/Xcode automation environment can launch the app with a window.
+- A first launch that must build all masks for an existing high-resolution 30-frame library can temporarily remain on onboarding; this one-time migration completed successfully in the current local library.

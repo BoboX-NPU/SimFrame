@@ -4,6 +4,7 @@ import SwiftUI
 struct DropPreviewView: View {
     @Bindable var state: AppState
     @State private var isDropTargeted = false
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         ZStack {
@@ -57,21 +58,38 @@ struct DropPreviewView: View {
 
     @ViewBuilder
     private var imagePreview: some View {
-        if let image = state.previewImage {
-            CheckerboardView()
-                .overlay {
-                    Image(nsImage: image)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFit()
-                        .padding(18)
+        GeometryReader { proxy in
+            Group {
+                if let image = state.previewImage {
+                    CheckerboardView()
+                        .overlay {
+                            Image(nsImage: image)
+                                .resizable()
+                                .interpolation(.high)
+                                .scaledToFit()
+                                .padding(18)
+                        }
+                } else {
+                    ProgressView("Rendering preview…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .overlay { RoundedRectangle(cornerRadius: 16).stroke(.quaternary) }
-        } else {
-            ProgressView("Rendering preview…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay { RoundedRectangle(cornerRadius: 16).stroke(.quaternary) }
+            .onAppear {
+                state.updatePreviewViewport(points: insetPreviewSize(proxy.size), displayScale: displayScale)
+            }
+            .onChange(of: proxy.size) { _, newSize in
+                state.updatePreviewViewport(points: insetPreviewSize(newSize), displayScale: displayScale)
+            }
+            .onChange(of: displayScale) { _, newScale in
+                state.updatePreviewViewport(points: insetPreviewSize(proxy.size), displayScale: newScale)
+            }
         }
+    }
+
+    private func insetPreviewSize(_ size: CGSize) -> CGSize {
+        CGSize(width: max(1, size.width - 36), height: max(1, size.height - 36))
     }
 
     @ViewBuilder

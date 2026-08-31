@@ -25,7 +25,7 @@ struct SimFrameApp: App {
             CommandGroup(after: .pasteboard) {
                 Button("Copy Framed Image") { state.copyImage() }
                     .keyboardShortcut("c", modifiers: .command)
-                    .disabled(state.capture?.kind != .image || state.previewImage == nil)
+                    .disabled(!state.canCopyImage)
             }
 #if DEBUG
             FrameInspectorCommands()
@@ -53,4 +53,3 @@ private struct FrameInspectorCommands: Commands {
     }
 }
 #endif
-

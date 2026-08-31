@@ -106,9 +106,9 @@ struct InspectorView: View {
                         .frame(maxWidth: .infinity)
                         .disabled(!state.canExport)
                     if state.capture?.kind == .image {
-                        Button("Copy Image") { state.copyImage() }
+                        Button(state.isCopying ? "Preparing Copy…" : "Copy Image") { state.copyImage() }
                             .frame(maxWidth: .infinity)
-                            .disabled(state.previewImage == nil)
+                            .disabled(!state.canCopyImage)
                     }
                 }
             }
@@ -117,4 +117,3 @@ struct InspectorView: View {
         .scrollContentBackground(.hidden)
     }
 }
-

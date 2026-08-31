@@ -3,6 +3,30 @@ import XCTest
 @testable import SimFrame
 
 final class DeviceDetectorTests: XCTestCase {
+    func testLatestRequestGenerationRejectsSlowerSelectionAndPreviewResults() async throws {
+        var requests = LatestRequestGeneration()
+        let slowRequest = requests.begin()
+        let slowTask = Task {
+            try? await Task.sleep(for: .milliseconds(40))
+            return "stale"
+        }
+
+        try await Task.sleep(for: .milliseconds(5))
+        let latestRequest = requests.begin()
+        let latestTask = Task {
+            try? await Task.sleep(for: .milliseconds(5))
+            return "latest"
+        }
+
+        var displayedValue: String?
+        let completedLatest = await latestTask.value
+        if requests.accepts(latestRequest) { displayedValue = completedLatest }
+        let completedSlow = await slowTask.value
+        if requests.accepts(slowRequest) { displayedValue = completedSlow }
+
+        XCTAssertEqual(displayedValue, "latest")
+    }
+
     func testExactResolutionTieIsStableAndAmbiguous() {
         let first = frame(id: "iphone-17-black", device: "iPhone 17")
         let second = frame(id: "iphone-17-pro-black", device: "iPhone 17 Pro")
@@ -50,4 +74,3 @@ final class DeviceDetectorTests: XCTestCase {
         )
     }
 }
-

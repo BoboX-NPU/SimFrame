@@ -110,7 +110,7 @@ final class VideoRendererTests: XCTestCase {
         try await VideoRenderer().render(
             sourceURL: sourceURL,
             destinationURL: destinationURL,
-            frameURL: frameURL,
+            assets: try frameAssets(frameURL: frameURL, frame: frame),
             frame: frame,
             settings: settings,
             job: VideoRenderJob(),
@@ -154,7 +154,7 @@ final class VideoRendererTests: XCTestCase {
         try await VideoRenderer().render(
             sourceURL: sourceURL,
             destinationURL: destinationURL,
-            frameURL: frameURL,
+            assets: try frameAssets(frameURL: frameURL, frame: frame),
             frame: frame,
             settings: settings,
             job: VideoRenderJob(),
@@ -205,7 +205,7 @@ final class VideoRendererTests: XCTestCase {
         try await VideoRenderer().render(
             sourceURL: sourceURL,
             destinationURL: destinationURL,
-            frameURL: frameURL,
+            assets: try frameAssets(frameURL: frameURL, frame: frame),
             frame: frame,
             settings: settings,
             job: VideoRenderJob(),
@@ -242,7 +242,7 @@ final class VideoRendererTests: XCTestCase {
         try await VideoRenderer().render(
             sourceURL: sourceURL,
             destinationURL: destinationURL,
-            frameURL: frameURL,
+            assets: try frameAssets(frameURL: frameURL, frame: frame),
             frame: frame,
             settings: settings,
             job: VideoRenderJob(),
@@ -271,6 +271,14 @@ final class VideoRendererTests: XCTestCase {
             at: url,
             encodedSize: CGSize(width: 320, height: 640),
             transform: .identity
+        )
+    }
+
+    private func frameAssets(frameURL: URL, frame: DeviceFrame) throws -> FrameRenderAssets {
+        let artwork = TestImageFactory.image(at: frameURL)
+        return FrameRenderAssets(
+            artwork: artwork,
+            screenMask: try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
         )
     }
 

@@ -4,6 +4,19 @@ import Foundation
 import Observation
 import UniformTypeIdentifiers
 
+struct LatestRequestGeneration: Sendable {
+    private(set) var value = 0
+
+    mutating func begin() -> Int {
+        value &+= 1
+        return value
+    }
+
+    func accepts(_ request: Int) -> Bool {
+        request == value
+    }
+}
+
 @MainActor
 @Observable
 final class AppState {
@@ -11,9 +24,17 @@ final class AppState {
     private let imageRenderer: ImageRenderer
     private let videoRenderer: VideoRenderer
     private let recentStore: RecentCaptureStore
-    private var captureAccessURL: URL?
-    private var captureAccessIsActive = false
-    private var currentVideoJob: VideoRenderJob?
+    @ObservationIgnored private var captureAccessURL: URL?
+    @ObservationIgnored private var captureAccessIsActive = false
+    @ObservationIgnored private var currentVideoJob: VideoRenderJob?
+    private var selectedAssets: FrameRenderAssets?
+    @ObservationIgnored private var frameLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var resizeTask: Task<Void, Never>?
+    @ObservationIgnored private var copyTask: Task<Void, Never>?
+    @ObservationIgnored private var selectionRequests = LatestRequestGeneration()
+    @ObservationIgnored private var previewRequests = LatestRequestGeneration()
+    @ObservationIgnored private var previewViewportPixels = CGSize(width: 1_600, height: 1_200)
 
     var manifest: FrameLibraryManifest?
     var capture: CaptureDescriptor?
@@ -27,6 +48,7 @@ final class AppState {
     var recentCaptures: [RecentCaptureRecord] = []
     var isImportingFrames = false
     var isExporting = false
+    var isCopying = false
     var exportProgress = 0.0
     var statusMessage = "Import an Apple device frame library to begin."
     var errorMessage: String?
@@ -46,9 +68,7 @@ final class AppState {
     }
 
     var frames: [DeviceFrame] { manifest?.frames ?? [] }
-    var selectedFrame: DeviceFrame? {
-        frames.first { $0.id == selectedFrameID }
-    }
+    var selectedFrame: DeviceFrame? { frames.first { $0.id == selectedFrameID } }
     var deviceNames: [String] {
         Array(Set(frames.map(\.device))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
@@ -62,6 +82,9 @@ final class AppState {
     var canExport: Bool {
         guard capture != nil, selectedFrame != nil, !isExporting else { return false }
         return !(settings.exportFormat == .mp4 && settings.background.mode == .transparent)
+    }
+    var canCopyImage: Bool {
+        capture?.kind == .image && selectedFrame != nil && selectedAssets != nil && !isCopying
     }
     var cropWarning: Bool {
         guard let capture, let selectedFrame else { return false }
@@ -82,7 +105,7 @@ final class AppState {
     func importFrameLibrary(from url: URL) {
         isImportingFrames = true
         errorMessage = nil
-        statusMessage = "Scanning device frames…"
+        statusMessage = "Preparing device frame masks…"
         Task {
             do {
                 let report = try await libraryService.importLibrary(from: url)
@@ -92,8 +115,7 @@ final class AppState {
                 settings.frameID = selectedFrameID
                 isImportingFrames = false
                 statusMessage = "Imported \(report.manifest.frames.count) device frames."
-                await loadSelectedFrameImage()
-                if capture != nil { detectAndPreview() }
+                beginSelectedFrameLoad()
             } catch {
                 isImportingFrames = false
                 present(error)
@@ -145,14 +167,11 @@ final class AppState {
     }
 
     func selectFrame(id: String) {
-        guard frames.contains(where: { $0.id == id }) else { return }
+        guard id != selectedFrameID, frames.contains(where: { $0.id == id }) else { return }
         selectedFrameID = id
         settings.frameID = id
         UserDefaults.standard.set(id, forKey: "lastFrameID")
-        Task {
-            await loadSelectedFrameImage()
-            refreshPreview()
-        }
+        beginSelectedFrameLoad()
     }
 
     func selectDevice(_ device: String) {
@@ -199,22 +218,60 @@ final class AppState {
         settings.exportFormat = format
     }
 
+    func updatePreviewViewport(points: CGSize, displayScale: CGFloat) {
+        guard points.width > 0, points.height > 0, displayScale > 0 else { return }
+        let pixels = CGSize(
+            width: max(1, (points.width * displayScale).rounded()),
+            height: max(1, (points.height * displayScale).rounded())
+        )
+        guard pixels != previewViewportPixels else { return }
+        resizeTask?.cancel()
+        resizeTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            guard let self else { return }
+            previewViewportPixels = pixels
+            refreshPreview()
+        }
+    }
+
     func refreshPreview() {
-        guard let capture, capture.kind == .image, let frame = selectedFrame else {
-            previewImage = nil
+        previewTask?.cancel()
+        let request = previewRequests.begin()
+        guard let capture, capture.kind == .image,
+              let frame = selectedFrame,
+              let assets = selectedAssets else {
+            if capture?.kind != .video { previewImage = nil }
             return
         }
-        Task {
+        previewImage = nil
+        let renderer = imageRenderer
+        let currentSettings = settings
+        let maximumPixelSize = previewViewportPixels
+        previewTask = Task { [weak self] in
             do {
-                let frameURL = await libraryService.frameURL(for: frame)
-                previewImage = try imageRenderer.preview(
-                    contentURL: capture.url,
-                    frameURL: frameURL,
-                    frame: frame,
-                    settings: settings
+                try await Task.sleep(for: .milliseconds(20))
+                let image = try await Task.detached(priority: .userInitiated) {
+                    try renderer.preview(
+                        contentURL: capture.url,
+                        assets: assets,
+                        frame: frame,
+                        settings: currentSettings,
+                        maximumPixelSize: maximumPixelSize
+                    )
+                }.value
+                try Task.checkCancellation()
+                guard let self, previewRequests.accepts(request),
+                      selectedFrameID == frame.id,
+                      settings == currentSettings else { return }
+                previewImage = NSImage(
+                    cgImage: image,
+                    size: NSSize(width: image.width, height: image.height)
                 )
                 statusMessage = cropWarning ? "Preview ready · capture will be center-cropped." : "Preview ready."
+            } catch is CancellationError {
+                return
             } catch {
+                guard let self, previewRequests.accepts(request) else { return }
                 present(error)
             }
         }
@@ -247,16 +304,17 @@ final class AppState {
                 if destinationAccessIsActive { destination.stopAccessingSecurityScopedResource() }
             }
             do {
-                let frameURL = await libraryService.frameURL(for: frame)
+                let assets = try await libraryService.assets(for: frame)
                 if capture.kind == .image {
-                    try await Task.detached {
-                        let image = try self.imageRenderer.render(
+                    let renderer = imageRenderer
+                    try await Task.detached(priority: .userInitiated) {
+                        let image = try renderer.render(
                             contentURL: capture.url,
-                            frameURL: frameURL,
+                            assets: assets,
                             frame: frame,
                             settings: currentSettings
                         )
-                        try self.imageRenderer.writePNG(image, to: destination)
+                        try renderer.writePNG(image, to: destination)
                     }.value
                     exportProgress = 1
                 } else {
@@ -265,7 +323,7 @@ final class AppState {
                     try await videoRenderer.render(
                         sourceURL: capture.url,
                         destinationURL: destination,
-                        frameURL: frameURL,
+                        assets: assets,
                         frame: frame,
                         settings: currentSettings,
                         job: job,
@@ -296,11 +354,44 @@ final class AppState {
     }
 
     func copyImage() {
-        guard capture?.kind == .image, let previewImage else { return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([previewImage])
-        statusMessage = "Copied framed image to the clipboard."
+        guard let capture, capture.kind == .image,
+              let frame = selectedFrame,
+              let assets = selectedAssets,
+              !isCopying else { return }
+        isCopying = true
+        statusMessage = "Preparing full-resolution copy…"
+        let renderer = imageRenderer
+        let currentSettings = settings
+        copyTask?.cancel()
+        copyTask = Task { [weak self] in
+            do {
+                let image = try await Task.detached(priority: .userInitiated) {
+                    try renderer.render(
+                        contentURL: capture.url,
+                        assets: assets,
+                        frame: frame,
+                        settings: currentSettings
+                    )
+                }.value
+                try Task.checkCancellation()
+                guard let self else { return }
+                let pasteboardImage = NSImage(
+                    cgImage: image,
+                    size: NSSize(width: image.width, height: image.height)
+                )
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.writeObjects([pasteboardImage])
+                isCopying = false
+                statusMessage = "Copied full-resolution framed image to the clipboard."
+            } catch is CancellationError {
+                self?.isCopying = false
+            } catch {
+                guard let self else { return }
+                isCopying = false
+                present(error)
+            }
+        }
     }
 
     func openAppleResources() {
@@ -315,13 +406,14 @@ final class AppState {
 
     private func bootstrap() async {
         do {
+            statusMessage = "Preparing device frame masks…"
             manifest = try await libraryService.loadManifest()
             selectedFrameID = UserDefaults.standard.string(forKey: "lastFrameID")
             if selectedFrame == nil { selectedFrameID = manifest?.frames.first?.id }
             settings.frameID = selectedFrameID
             if let manifest {
                 statusMessage = "\(manifest.frames.count) device frames ready. Drop a capture to begin."
-                await loadSelectedFrameImage()
+                beginSelectedFrameLoad()
             }
             await handleLaunchArguments()
         } catch {
@@ -351,10 +443,7 @@ final class AppState {
         )
         if let best = detection?.best { selectedFrameID = best.frame.id }
         settings.frameID = selectedFrameID
-        Task {
-            await loadSelectedFrameImage()
-            refreshPreview()
-        }
+        beginSelectedFrameLoad()
         if capture.kind == .video {
             statusMessage = detection?.isAmbiguous == true ? "Video ready · choose the correct device." : "Video ready."
         } else if detection?.isAmbiguous == true {
@@ -362,15 +451,41 @@ final class AppState {
         }
     }
 
-    private func loadSelectedFrameImage() async {
-        guard let frame = selectedFrame else {
-            selectedFrameImage = nil
-            selectedFrameMaskImage = nil
-            return
+    private func beginSelectedFrameLoad() {
+        frameLoadTask?.cancel()
+        previewTask?.cancel()
+        copyTask?.cancel()
+        isCopying = false
+        let request = selectionRequests.begin()
+        selectedAssets = nil
+        selectedFrameImage = nil
+        selectedFrameMaskImage = nil
+        if capture?.kind == .image { previewImage = nil }
+        guard let frame = selectedFrame else { return }
+
+        frameLoadTask = Task { [weak self] in
+            do {
+                guard let self else { return }
+                let assets = try await libraryService.assets(for: frame)
+                try Task.checkCancellation()
+                guard selectionRequests.accepts(request), selectedFrameID == frame.id else { return }
+                selectedAssets = assets
+                selectedFrameImage = NSImage(
+                    cgImage: assets.artwork,
+                    size: NSSize(width: assets.artwork.width, height: assets.artwork.height)
+                )
+                selectedFrameMaskImage = NSImage(
+                    cgImage: assets.screenMask,
+                    size: NSSize(width: assets.screenMask.width, height: assets.screenMask.height)
+                )
+                refreshPreview()
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self, selectionRequests.accepts(request) else { return }
+                present(error)
+            }
         }
-        let url = await libraryService.frameURL(for: frame)
-        selectedFrameImage = NSImage(contentsOf: url)
-        selectedFrameMaskImage = try? imageRenderer.screenApertureMask(frameURL: url, frame: frame)
     }
 
     private func present(_ error: Error) {

@@ -6,10 +6,20 @@ import ImageIO
 import UniformTypeIdentifiers
 
 actor FrameLibraryService {
+    private struct CacheEntry {
+        let assets: FrameRenderAssets
+        let cost: Int
+        var lastAccess: UInt64
+    }
+
+    private static let assetCacheCostLimit = 128 * 1_024 * 1_024
     private let fileManager: FileManager
     private let baseDirectory: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private var assetCache: [String: CacheEntry] = [:]
+    private var assetCacheCost = 0
+    private var assetCacheAccessCounter: UInt64 = 0
 
     init(baseDirectory: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -32,14 +42,45 @@ actor FrameLibraryService {
         baseDirectory.appendingPathComponent("FrameLibrary", isDirectory: true)
     }
 
+    var masksDirectory: URL {
+        libraryDirectory.appendingPathComponent("Masks", isDirectory: true)
+    }
+
     func loadManifest() throws -> FrameLibraryManifest? {
         let url = libraryDirectory.appendingPathComponent("manifest.json")
         guard fileManager.fileExists(atPath: url.path) else { return nil }
-        return try decoder.decode(FrameLibraryManifest.self, from: Data(contentsOf: url))
+        let manifest = try decoder.decode(FrameLibraryManifest.self, from: Data(contentsOf: url))
+        try ensureMasks(for: manifest)
+        return manifest
     }
 
     func frameURL(for frame: DeviceFrame) -> URL {
         libraryDirectory.appendingPathComponent(frame.frameFile)
+    }
+
+    func maskURL(for frame: DeviceFrame) -> URL {
+        masksDirectory.appendingPathComponent("\(frame.id).png")
+    }
+
+    func assets(for frame: DeviceFrame) throws -> FrameRenderAssets {
+        if var cached = assetCache[frame.id] {
+            assetCacheAccessCounter &+= 1
+            cached.lastAccess = assetCacheAccessCounter
+            assetCache[frame.id] = cached
+            return cached.assets
+        }
+        let artwork = try loadImage(at: frameURL(for: frame), message: "Unable to decode the selected frame")
+        let maskLocation = maskURL(for: frame)
+        let mask: CGImage
+        if let existing = validMask(at: maskLocation, for: frame) {
+            mask = existing
+        } else {
+            mask = try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
+            try writeMask(mask, to: maskLocation)
+        }
+        let assets = FrameRenderAssets(artwork: artwork, screenMask: mask)
+        cache(assets, for: frame.id)
+        return assets
     }
 
     func importLibrary(from sourceDirectory: URL) throws -> FrameImportReport {
@@ -56,6 +97,8 @@ actor FrameLibraryService {
             var frames: [DeviceFrame] = []
             var skipped: [String] = []
             var usedIDs = Set<String>()
+            let masksDirectory = staging.appendingPathComponent("Masks", isDirectory: true)
+            try fileManager.createDirectory(at: masksDirectory, withIntermediateDirectories: true)
 
             for source in candidates {
                 do {
@@ -78,6 +121,9 @@ actor FrameLibraryService {
                     let destination = staging.appendingPathComponent(relativePath)
                     try fileManager.copyItem(at: source, to: destination)
                     frame.frameFile = relativePath
+                    let artwork = try loadImage(at: source, message: "Unable to decode the selected frame")
+                    let mask = try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
+                    try writeMask(mask, to: masksDirectory.appendingPathComponent("\(frame.id).png"))
                     frames.append(frame)
                 } catch {
                     skipped.append("\(source.lastPathComponent): \(error.localizedDescription)")
@@ -98,6 +144,7 @@ actor FrameLibraryService {
             let manifestData = try encoder.encode(manifest)
             try manifestData.write(to: staging.appendingPathComponent("manifest.json"), options: .atomic)
             try install(staging: staging)
+            clearAssetCache()
             AppLog.library.info("Imported \(frames.count) frame files")
             return FrameImportReport(manifest: manifest, skippedFiles: skipped)
         } catch {
@@ -111,10 +158,100 @@ actor FrameLibraryService {
               let index = manifest.frames.firstIndex(where: { $0.id == updated.id }) else {
             throw SimFrameError.noUsableFrames
         }
+        let artwork = try loadImage(at: frameURL(for: updated), message: "Unable to decode the selected frame")
+        let mask = try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: updated)
+        try writeMask(mask, to: maskURL(for: updated))
         manifest.frames[index] = updated
         let data = try encoder.encode(manifest)
         try data.write(to: libraryDirectory.appendingPathComponent("manifest.json"), options: .atomic)
+        removeCachedAssets(for: updated.id)
         return manifest
+    }
+
+    private func ensureMasks(for manifest: FrameLibraryManifest) throws {
+        try fileManager.createDirectory(at: masksDirectory, withIntermediateDirectories: true)
+        for frame in manifest.frames {
+            let destination = maskURL(for: frame)
+            if validMask(at: destination, for: frame) != nil {
+                continue
+            }
+            let artwork = try loadImage(at: frameURL(for: frame), message: "Unable to decode the selected frame")
+            let mask = try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
+            try writeMask(mask, to: destination)
+        }
+    }
+
+    private func loadImage(at url: URL, message: String) throws -> CGImage {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw SimFrameError.invalidFrame(message)
+        }
+        return image
+    }
+
+    private func validMask(at url: URL, for frame: DeviceFrame) -> CGImage? {
+        guard fileManager.fileExists(atPath: url.path),
+              let image = try? loadImage(at: url, message: "Unable to decode the selected frame mask") else {
+            return nil
+        }
+        let expected = frame.screenRect.integral.size
+        guard image.width == Int(expected.width), image.height == Int(expected.height) else { return nil }
+        return image
+    }
+
+    private func writeMask(_ image: CGImage, to destination: URL) throws {
+        try fileManager.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let temporary = destination.deletingLastPathComponent().appendingPathComponent(
+            ".\(destination.lastPathComponent)-\(UUID().uuidString).tmp"
+        )
+        defer { try? fileManager.removeItem(at: temporary) }
+        guard let writer = CGImageDestinationCreateWithURL(
+            temporary as CFURL,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ) else {
+            throw SimFrameError.invalidFrame("Unable to create the selected frame mask")
+        }
+        CGImageDestinationAddImage(writer, image, nil)
+        guard CGImageDestinationFinalize(writer) else {
+            throw SimFrameError.invalidFrame("Unable to write the selected frame mask")
+        }
+        if fileManager.fileExists(atPath: destination.path) {
+            _ = try fileManager.replaceItemAt(destination, withItemAt: temporary)
+        } else {
+            try fileManager.moveItem(at: temporary, to: destination)
+        }
+    }
+
+    private func cache(_ assets: FrameRenderAssets, for frameID: String) {
+        removeCachedAssets(for: frameID)
+        let cost = assets.decodedByteCost
+        guard cost <= Self.assetCacheCostLimit else { return }
+        assetCacheAccessCounter &+= 1
+        assetCache[frameID] = CacheEntry(
+            assets: assets,
+            cost: cost,
+            lastAccess: assetCacheAccessCounter
+        )
+        assetCacheCost += cost
+        while assetCacheCost > Self.assetCacheCostLimit,
+              let leastRecent = assetCache.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key {
+            removeCachedAssets(for: leastRecent)
+        }
+    }
+
+    private func removeCachedAssets(for frameID: String) {
+        guard let removed = assetCache.removeValue(forKey: frameID) else { return }
+        assetCacheCost -= removed.cost
+    }
+
+    private func clearAssetCache() {
+        assetCache.removeAll(keepingCapacity: true)
+        assetCacheCost = 0
     }
 
     private func pngFiles(in directory: URL) throws -> [URL] {

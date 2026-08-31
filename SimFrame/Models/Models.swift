@@ -159,6 +159,15 @@ struct FrameImportReport: Sendable {
     var skippedFiles: [String]
 }
 
+struct FrameRenderAssets: @unchecked Sendable {
+    let artwork: CGImage
+    let screenMask: CGImage
+
+    var decodedByteCost: Int {
+        artwork.bytesPerRow * artwork.height + screenMask.bytesPerRow * screenMask.height
+    }
+}
+
 enum SimFrameError: LocalizedError, Equatable {
     case unsupportedFile
     case missingVideoTrack
@@ -180,4 +189,3 @@ enum SimFrameError: LocalizedError, Equatable {
         }
     }
 }
-

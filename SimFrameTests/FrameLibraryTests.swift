@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import XCTest
 @testable import SimFrame
 
@@ -30,6 +31,9 @@ final class FrameLibraryTests: XCTestCase {
         let service = FrameLibraryService(baseDirectory: root.appendingPathComponent("Support"))
         let first = try await service.importLibrary(from: valid)
         XCTAssertEqual(first.manifest.frames.count, 1)
+        let firstFrame = try XCTUnwrap(first.manifest.frames.first)
+        let maskURL = root.appendingPathComponent("Support/FrameLibrary/Masks/\(firstFrame.id).png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: maskURL.path))
 
         do {
             _ = try await service.importLibrary(from: invalid)
@@ -39,6 +43,57 @@ final class FrameLibraryTests: XCTestCase {
         }
         let retained = try await service.loadManifest()
         XCTAssertEqual(retained?.frames.count, 1)
+        XCTAssertNotNil(CGImageSourceCreateWithURL(maskURL as CFURL, nil))
+    }
+
+    func testExistingLibraryRepairsMissingAndCorruptMasks() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = root.appendingPathComponent("Source")
+        let support = root.appendingPathComponent("Support")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try TestImageFactory.writeFrame(to: source.appendingPathComponent("Test Phone - Black - Portrait.png"))
+
+        let importer = FrameLibraryService(baseDirectory: support)
+        let report = try await importer.importLibrary(from: source)
+        let frame = try XCTUnwrap(report.manifest.frames.first)
+        let maskURL = support.appendingPathComponent("FrameLibrary/Masks/\(frame.id).png")
+        try FileManager.default.removeItem(at: maskURL)
+
+        let missingMaskLoader = FrameLibraryService(baseDirectory: support)
+        _ = try await missingMaskLoader.loadManifest()
+        XCTAssertNotNil(CGImageSourceCreateWithURL(maskURL as CFURL, nil))
+
+        try Data("corrupt".utf8).write(to: maskURL, options: .atomic)
+        let corruptMaskLoader = FrameLibraryService(baseDirectory: support)
+        _ = try await corruptMaskLoader.loadManifest()
+        let repairedSource = try XCTUnwrap(CGImageSourceCreateWithURL(maskURL as CFURL, nil))
+        XCTAssertNotNil(CGImageSourceCreateImageAtIndex(repairedSource, 0, nil))
+
+        try TestImageFactory.writeCapture(to: maskURL, size: CGSize(width: 10, height: 10))
+        let wrongSizeMaskLoader = FrameLibraryService(baseDirectory: support)
+        _ = try await wrongSizeMaskLoader.loadManifest()
+        let repairedAssets = try await wrongSizeMaskLoader.assets(for: frame)
+        XCTAssertEqual(repairedAssets.screenMask.width, Int(frame.screenRect.width))
+        XCTAssertEqual(repairedAssets.screenMask.height, Int(frame.screenRect.height))
+    }
+
+    func testFrameAssetsReuseDecodedMemoryCache() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = root.appendingPathComponent("Source")
+        let support = root.appendingPathComponent("Support")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try TestImageFactory.writeFrame(to: source.appendingPathComponent("Test Phone - Black - Portrait.png"))
+
+        let service = FrameLibraryService(baseDirectory: support)
+        let report = try await service.importLibrary(from: source)
+        let frame = try XCTUnwrap(report.manifest.frames.first)
+        let first = try await service.assets(for: frame)
+        let second = try await service.assets(for: frame)
+
+        XCTAssertTrue(first.artwork === second.artwork)
+        XCTAssertTrue(first.screenMask === second.screenMask)
     }
 
     func testLocalIPhone17PackScansThirtyFramesWhenPresent() throws {
@@ -55,4 +110,3 @@ final class FrameLibraryTests: XCTestCase {
         XCTAssertEqual(pro.screenRect, CGRect(x: 72, y: 69, width: 1206, height: 2622))
     }
 }
-

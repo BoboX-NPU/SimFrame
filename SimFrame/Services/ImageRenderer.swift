@@ -1,6 +1,5 @@
 import AppKit
 import CoreImage
-import CoreImage.CIFilterBuiltins
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -14,27 +13,45 @@ final class ImageRenderer: @unchecked Sendable {
 
     func render(
         contentURL: URL,
+        assets: FrameRenderAssets,
+        frame: DeviceFrame,
+        settings: RenderSettings
+    ) throws -> CGImage {
+        try renderedImage(
+            contentURL: contentURL,
+            assets: assets,
+            frame: frame,
+            settings: settings,
+            maximumPixelSize: nil
+        )
+    }
+
+    func preview(
+        contentURL: URL,
+        assets: FrameRenderAssets,
+        frame: DeviceFrame,
+        settings: RenderSettings,
+        maximumPixelSize: CGSize
+    ) throws -> CGImage {
+        try renderedImage(
+            contentURL: contentURL,
+            assets: assets,
+            frame: frame,
+            settings: settings,
+            maximumPixelSize: maximumPixelSize
+        )
+    }
+
+    /// Retained for the developer inspector and focused renderer tests. Production
+    /// paths obtain precomputed assets from `FrameLibraryService`.
+    func render(
+        contentURL: URL,
         frameURL: URL,
         frame: DeviceFrame,
         settings: RenderSettings
     ) throws -> CGImage {
-        guard let content = CIImage(contentsOf: contentURL, options: [.applyOrientationProperty: true]),
-              let frameImage = CIImage(contentsOf: frameURL, options: [.applyOrientationProperty: true]) else {
-            throw SimFrameError.unsupportedFile
-        }
-        let geometry = CompositionGeometry(frame: frame, preset: settings.canvasPreset)
-        let preparedFrame = try CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
-        let output = CompositionRenderer.composite(
-            content: content,
-            preparedFrame: preparedFrame,
-            geometry: geometry,
-            background: settings.background
-        )
-        let bounds = CGRect(origin: .zero, size: geometry.outputSize)
-        guard let image = context.createCGImage(output, from: bounds) else {
-            throw SimFrameError.exportFailed("Core Image did not produce an output image")
-        }
-        return image
+        let assets = try Self.loadUncachedAssets(frameURL: frameURL, frame: frame)
+        return try render(contentURL: contentURL, assets: assets, frame: frame, settings: settings)
     }
 
     func preview(
@@ -48,16 +65,27 @@ final class ImageRenderer: @unchecked Sendable {
     }
 
     func screenApertureMask(frameURL: URL, frame: DeviceFrame) throws -> NSImage {
-        guard let frameImage = CIImage(contentsOf: frameURL, options: [.applyOrientationProperty: true]) else {
-            throw SimFrameError.invalidFrame("Unable to decode the selected frame")
+        let assets = try Self.loadUncachedAssets(frameURL: frameURL, frame: frame)
+        return NSImage(
+            cgImage: assets.screenMask,
+            size: NSSize(width: assets.screenMask.width, height: assets.screenMask.height)
+        )
+    }
+
+    static func previewPixelSize(outputSize: CGSize, maximumPixelSize: CGSize) -> CGSize {
+        guard outputSize.width > 0, outputSize.height > 0,
+              maximumPixelSize.width > 0, maximumPixelSize.height > 0 else {
+            return outputSize
         }
-        let geometry = CompositionGeometry(frame: frame, preset: .original)
-        let preparedFrame = try CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
-        let screenBounds = geometry.coreImageRect(fromTopLeft: geometry.screenRect)
-        guard let mask = context.createCGImage(preparedFrame.apertureMask, from: screenBounds) else {
-            throw SimFrameError.invalidFrame("Unable to create the screen aperture mask")
-        }
-        return NSImage(cgImage: mask, size: NSSize(width: mask.width, height: mask.height))
+        let scale = min(
+            maximumPixelSize.width / outputSize.width,
+            maximumPixelSize.height / outputSize.height,
+            1
+        )
+        return CGSize(
+            width: max(1, (outputSize.width * scale).rounded()),
+            height: max(1, (outputSize.height * scale).rounded())
+        )
     }
 
     func writePNG(_ image: CGImage, to destination: URL) throws {
@@ -78,6 +106,52 @@ final class ImageRenderer: @unchecked Sendable {
         try commit(temporaryURL: temporaryURL, to: destination)
     }
 
+    private func renderedImage(
+        contentURL: URL,
+        assets: FrameRenderAssets,
+        frame: DeviceFrame,
+        settings: RenderSettings,
+        maximumPixelSize: CGSize?
+    ) throws -> CGImage {
+        guard let content = CIImage(contentsOf: contentURL, options: [.applyOrientationProperty: true]) else {
+            throw SimFrameError.unsupportedFile
+        }
+        let geometry = CompositionGeometry(frame: frame, preset: settings.canvasPreset)
+        let preparedFrame = CompositionRenderer.prepareFrame(assets: assets, geometry: geometry)
+        var output = CompositionRenderer.composite(
+            content: content,
+            preparedFrame: preparedFrame,
+            geometry: geometry,
+            background: settings.background
+        )
+        var bounds = CGRect(origin: .zero, size: geometry.outputSize)
+        if let maximumPixelSize {
+            let previewSize = Self.previewPixelSize(
+                outputSize: geometry.outputSize,
+                maximumPixelSize: maximumPixelSize
+            )
+            let scaleX = previewSize.width / geometry.outputSize.width
+            let scaleY = previewSize.height / geometry.outputSize.height
+            output = output.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+            bounds = CGRect(origin: .zero, size: previewSize)
+        }
+        guard let image = context.createCGImage(output, from: bounds) else {
+            throw SimFrameError.exportFailed("Core Image did not produce an output image")
+        }
+        return image
+    }
+
+    private static func loadUncachedAssets(frameURL: URL, frame: DeviceFrame) throws -> FrameRenderAssets {
+        guard let source = CGImageSourceCreateWithURL(frameURL as CFURL, nil),
+              let artwork = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw SimFrameError.invalidFrame("Unable to decode the selected frame")
+        }
+        return FrameRenderAssets(
+            artwork: artwork,
+            screenMask: try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
+        )
+    }
+
     private func commit(temporaryURL: URL, to destination: URL) throws {
         if FileManager.default.fileExists(atPath: destination.path) {
             _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporaryURL)
@@ -88,17 +162,16 @@ final class ImageRenderer: @unchecked Sendable {
 }
 
 enum CompositionRenderer {
-    private static let apertureOverlapRadius: CGFloat = 2
-    private static let maskContext = CIContext(options: [.cacheIntermediates: false])
+    private static let apertureOverlapRadius = 2
 
     struct PreparedFrame {
         let artwork: CIImage
         let apertureMask: CIImage
     }
 
-    static func prepareFrame(_ frame: CIImage, geometry: CompositionGeometry) throws -> PreparedFrame {
+    static func prepareFrame(assets: FrameRenderAssets, geometry: CompositionGeometry) -> PreparedFrame {
         let targetFrame = geometry.coreImageRect(fromTopLeft: geometry.frameRect)
-        let normalizedFrame = normalize(frame)
+        let normalizedFrame = topLeftOrientedImage(assets.artwork)
         let frameScaleX = targetFrame.width / max(normalizedFrame.extent.width, 1)
         let frameScaleY = targetFrame.height / max(normalizedFrame.extent.height, 1)
         var placedFrame = normalizedFrame.transformed(by: CGAffineTransform(scaleX: frameScaleX, y: frameScaleY))
@@ -108,22 +181,15 @@ enum CompositionRenderer {
         ))
 
         let targetScreen = geometry.coreImageRect(fromTopLeft: geometry.screenRect)
-        let apertureMask = try isolatedApertureMask(from: placedFrame, in: targetScreen)
-        return PreparedFrame(artwork: placedFrame, apertureMask: apertureMask)
-    }
-
-    static func composite(
-        content: CIImage,
-        frame: CIImage,
-        geometry: CompositionGeometry,
-        background: RenderBackground
-    ) throws -> CIImage {
-        try composite(
-            content: content,
-            preparedFrame: prepareFrame(frame, geometry: geometry),
-            geometry: geometry,
-            background: background
-        )
+        let normalizedMask = topLeftOrientedImage(assets.screenMask)
+        let maskScaleX = targetScreen.width / max(normalizedMask.extent.width, 1)
+        let maskScaleY = targetScreen.height / max(normalizedMask.extent.height, 1)
+        var placedMask = normalizedMask.transformed(by: CGAffineTransform(scaleX: maskScaleX, y: maskScaleY))
+        placedMask = placedMask.transformed(by: CGAffineTransform(
+            translationX: targetScreen.minX - placedMask.extent.minX,
+            y: targetScreen.minY - placedMask.extent.minY
+        )).cropped(to: targetScreen)
+        return PreparedFrame(artwork: placedFrame, apertureMask: placedMask)
     }
 
     static func composite(
@@ -158,8 +224,7 @@ enum CompositionRenderer {
         placedContent = placedContent.transformed(by: CGAffineTransform(
             translationX: targetScreen.midX - placedContent.extent.midX,
             y: targetScreen.midY - placedContent.extent.midY
-        ))
-        placedContent = placedContent.cropped(to: targetScreen)
+        )).cropped(to: targetScreen)
         let transparentScreen = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0))
             .cropped(to: targetScreen)
         placedContent = placedContent
@@ -196,19 +261,22 @@ enum CompositionRenderer {
         ))
     }
 
-    private static func isolatedApertureMask(from frame: CIImage, in screenRect: CGRect) throws -> CIImage {
-        let inspectionBounds = frame.extent.integral
-        let width = Int(inspectionBounds.width.rounded())
-        let height = Int(inspectionBounds.height.rounded())
-        guard width > 0, height > 0,
-              let frameImage = maskContext.createCGImage(frame, from: inspectionBounds) else {
+    private static func topLeftOrientedImage(_ image: CGImage) -> CIImage {
+        normalize(CIImage(cgImage: image))
+            .transformed(by: CGAffineTransform(scaleX: 1, y: -1))
+            .transformed(by: CGAffineTransform(translationX: 0, y: CGFloat(image.height)))
+    }
+
+    static func makeScreenMask(frameImage: CGImage, frame: DeviceFrame) throws -> CGImage {
+        let width = frameImage.width
+        let height = frameImage.height
+        guard width > 0, height > 0 else {
             throw SimFrameError.invalidFrame("Unable to inspect the selected frame aperture")
         }
-
         let bytesPerRow = width * 4
-        var framePixels = [UInt8](repeating: 0, count: height * bytesPerRow)
-        guard let frameContext = CGContext(
-            data: &framePixels,
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+        guard let context = CGContext(
+            data: &pixels,
             width: width,
             height: height,
             bitsPerComponent: 8,
@@ -218,18 +286,17 @@ enum CompositionRenderer {
         ) else {
             throw SimFrameError.invalidFrame("Unable to inspect the selected frame aperture")
         }
-        frameContext.draw(frameImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        let alpha = (0..<(width * height)).map { framePixels[$0 * 4 + 3] }
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        context.draw(frameImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var alpha = [UInt8](repeating: 0, count: width * height)
+        for index in alpha.indices { alpha[index] = pixels[index * 4 + 3] }
 
-        let localScreenCenter = CGPoint(
-            x: screenRect.midX - inspectionBounds.minX,
-            y: screenRect.midY - inspectionBounds.minY
-        )
         guard let apertureSeed = nearestTransparentSeed(
             alpha: alpha,
             width: width,
             height: height,
-            center: localScreenCenter
+            center: CGPoint(x: frame.screenRect.midX, y: frame.screenRect.midY)
         ) else {
             throw SimFrameError.invalidFrame("Unable to isolate the selected frame aperture")
         }
@@ -247,57 +314,139 @@ enum CompositionRenderer {
             seeds: borderPixels(width: width, height: height),
             maximumAlpha: 247
         )
-
-        let apertureImage = try binaryMaskImage(flags: aperture, inverted: false, width: width, height: height)
-        let safeInteriorImage = try binaryMaskImage(flags: exterior, inverted: true, width: width, height: height)
-        let localBounds = CGRect(x: 0, y: 0, width: width, height: height)
-        let expandedAperture = apertureImage
-            .applyingFilter("CIMorphologyMaximum", parameters: [
-                kCIInputRadiusKey: apertureOverlapRadius
-            ])
-            .cropped(to: localBounds)
-        let transparent = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0))
-            .cropped(to: localBounds)
-        return expandedAperture
-            .applyingFilter("CIBlendWithAlphaMask", parameters: [
-                kCIInputBackgroundImageKey: transparent,
-                "inputMaskImage": safeInteriorImage
-            ])
-            .cropped(to: localBounds)
-            .transformed(by: CGAffineTransform(
-                translationX: inspectionBounds.minX,
-                y: inspectionBounds.minY
-            ))
-            .cropped(to: screenRect)
-    }
-
-    private static func binaryMaskImage(
-        flags: [UInt8],
-        inverted: Bool,
-        width: Int,
-        height: Int
-    ) throws -> CIImage {
-        let bytesPerRow = width * 4
-        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
-        for index in flags.indices where (flags[index] == 0) == inverted {
-            let pixel = index * 4
-            pixels[pixel] = 255
-            pixels[pixel + 1] = 255
-            pixels[pixel + 2] = 255
-            pixels[pixel + 3] = 255
-        }
-        guard let context = CGContext(
-            data: &pixels,
+        let silhouette = orthogonalSpanHull(
+            aperture: aperture,
             width: width,
             height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ), let image = context.makeImage() else {
+            screenRect: frame.screenRect.integral
+        )
+        let expanded = dilated(
+            silhouette,
+            width: width,
+            height: height,
+            radius: apertureOverlapRadius
+        )
+        return try croppedGrayscaleMask(
+            expanded: expanded,
+            exterior: exterior,
+            frameSize: CGSize(width: width, height: height),
+            screenRect: frame.screenRect.integral
+        )
+    }
+
+    private static func orthogonalSpanHull(
+        aperture: [UInt8],
+        width: Int,
+        height: Int,
+        screenRect: CGRect
+    ) -> [UInt8] {
+        let minX = max(0, Int(screenRect.minX))
+        let maxX = min(width - 1, Int(screenRect.maxX) - 1)
+        let minY = max(0, Int(screenRect.minY))
+        let maxY = min(height - 1, Int(screenRect.maxY) - 1)
+        var hull = aperture
+        guard minX <= maxX, minY <= maxY else { return hull }
+
+        for y in minY...maxY {
+            var first: Int?
+            var last: Int?
+            for x in minX...maxX where aperture[y * width + x] != 0 {
+                first = first ?? x
+                last = x
+            }
+            if let first, let last {
+                for x in first...last { hull[y * width + x] = 1 }
+            }
+        }
+        for x in minX...maxX {
+            var first: Int?
+            var last: Int?
+            for y in minY...maxY where aperture[y * width + x] != 0 {
+                first = first ?? y
+                last = y
+            }
+            if let first, let last {
+                for y in first...last { hull[y * width + x] = 1 }
+            }
+        }
+        return hull
+    }
+
+    private static func dilated(_ flags: [UInt8], width: Int, height: Int, radius: Int) -> [UInt8] {
+        guard radius > 0 else { return flags }
+        var horizontal = [UInt8](repeating: 0, count: flags.count)
+        for y in 0..<height {
+            var includedCount = 0
+            for x in 0...min(width - 1, radius) where flags[y * width + x] != 0 {
+                includedCount += 1
+            }
+            for x in 0..<width {
+                horizontal[y * width + x] = includedCount > 0 ? 1 : 0
+                let outgoing = x - radius
+                if outgoing >= 0, flags[y * width + outgoing] != 0 { includedCount -= 1 }
+                let incoming = x + radius + 1
+                if incoming < width, flags[y * width + incoming] != 0 { includedCount += 1 }
+            }
+        }
+        var result = [UInt8](repeating: 0, count: flags.count)
+        for x in 0..<width {
+            var includedCount = 0
+            for y in 0...min(height - 1, radius) where horizontal[y * width + x] != 0 {
+                includedCount += 1
+            }
+            for y in 0..<height {
+                result[y * width + x] = includedCount > 0 ? 1 : 0
+                let outgoing = y - radius
+                if outgoing >= 0, horizontal[outgoing * width + x] != 0 { includedCount -= 1 }
+                let incoming = y + radius + 1
+                if incoming < height, horizontal[incoming * width + x] != 0 { includedCount += 1 }
+            }
+        }
+        return result
+    }
+
+    private static func croppedGrayscaleMask(
+        expanded: [UInt8],
+        exterior: [UInt8],
+        frameSize: CGSize,
+        screenRect: CGRect
+    ) throws -> CGImage {
+        let frameWidth = Int(frameSize.width)
+        let frameHeight = Int(frameSize.height)
+        let minX = max(0, Int(screenRect.minX))
+        let minY = max(0, Int(screenRect.minY))
+        let maskWidth = min(frameWidth - minX, Int(screenRect.width))
+        let maskHeight = min(frameHeight - minY, Int(screenRect.height))
+        guard maskWidth > 0, maskHeight > 0 else {
             throw SimFrameError.invalidFrame("Unable to create the selected frame aperture mask")
         }
-        return CIImage(cgImage: image)
+        let bytesPerRow = maskWidth * 2
+        var bytes = [UInt8](repeating: 0, count: bytesPerRow * maskHeight)
+        for y in 0..<maskHeight {
+            let sourceRow = (minY + y) * frameWidth + minX
+            let destinationRow = y * bytesPerRow
+            for x in 0..<maskWidth where expanded[sourceRow + x] != 0 && exterior[sourceRow + x] == 0 {
+                bytes[destinationRow + x * 2] = 255
+                bytes[destinationRow + x * 2 + 1] = 255
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+              let image = CGImage(
+                  width: maskWidth,
+                  height: maskHeight,
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 16,
+                  bytesPerRow: bytesPerRow,
+                  space: CGColorSpaceCreateDeviceGray(),
+                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                  provider: provider,
+                  decode: nil,
+                  shouldInterpolate: false,
+                  intent: .defaultIntent
+              ) else {
+            throw SimFrameError.invalidFrame("Unable to create the selected frame aperture mask")
+        }
+        return image
     }
 
     private static func nearestTransparentSeed(
@@ -352,42 +501,29 @@ enum CompositionRenderer {
             included[seed] = 1
             queue.append(seed)
         }
-
         var cursor = 0
         while cursor < queue.count {
             let index = queue[cursor]
             cursor += 1
             let x = index % width
             let y = index / width
-            if x > 0 {
-                let neighbor = index - 1
-                if included[neighbor] == 0, alpha[neighbor] <= maximumAlpha {
-                    included[neighbor] = 1
-                    queue.append(neighbor)
-                }
-            }
-            if x + 1 < width {
-                let neighbor = index + 1
-                if included[neighbor] == 0, alpha[neighbor] <= maximumAlpha {
-                    included[neighbor] = 1
-                    queue.append(neighbor)
-                }
-            }
-            if y > 0 {
-                let neighbor = index - width
-                if included[neighbor] == 0, alpha[neighbor] <= maximumAlpha {
-                    included[neighbor] = 1
-                    queue.append(neighbor)
-                }
-            }
-            if y + 1 < height {
-                let neighbor = index + width
-                if included[neighbor] == 0, alpha[neighbor] <= maximumAlpha {
-                    included[neighbor] = 1
-                    queue.append(neighbor)
-                }
-            }
+            if x > 0 { include(index - 1, alpha: alpha, maximumAlpha: maximumAlpha, in: &included, queue: &queue) }
+            if x + 1 < width { include(index + 1, alpha: alpha, maximumAlpha: maximumAlpha, in: &included, queue: &queue) }
+            if y > 0 { include(index - width, alpha: alpha, maximumAlpha: maximumAlpha, in: &included, queue: &queue) }
+            if y + 1 < height { include(index + width, alpha: alpha, maximumAlpha: maximumAlpha, in: &included, queue: &queue) }
         }
         return included
+    }
+
+    private static func include(
+        _ index: Int,
+        alpha: [UInt8],
+        maximumAlpha: UInt8,
+        in included: inout [UInt8],
+        queue: inout [Int]
+    ) {
+        guard included[index] == 0, alpha[index] <= maximumAlpha else { return }
+        included[index] = 1
+        queue.append(index)
     }
 }

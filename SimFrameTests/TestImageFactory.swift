@@ -10,7 +10,8 @@ enum TestImageFactory {
         canvas: CGSize = CGSize(width: 360, height: 720),
         screen: CGRect = CGRect(x: 20, y: 40, width: 320, height: 640),
         screenCornerRadius: CGFloat = 0,
-        deviceCornerRadius: CGFloat = 0
+        deviceCornerRadius: CGFloat = 0,
+        screenOcclusions: [CGRect] = []
     ) throws {
         let context = try bitmapContext(size: canvas)
         context.setFillColor(CGColor(gray: 0.12, alpha: 1))
@@ -38,6 +39,10 @@ enum TestImageFactory {
             context.restoreGState()
         } else {
             context.clear(screen)
+        }
+        context.setFillColor(CGColor(gray: 0.02, alpha: 1))
+        for occlusion in screenOcclusions {
+            context.fill(occlusion)
         }
         try write(context.makeImage()!, to: url)
     }

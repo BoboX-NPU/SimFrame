@@ -25,7 +25,7 @@ final class VideoRenderer: @unchecked Sendable {
     func render(
         sourceURL: URL,
         destinationURL: URL,
-        frameURL: URL,
+        assets: FrameRenderAssets,
         frame: DeviceFrame,
         settings: RenderSettings,
         job: VideoRenderJob,
@@ -37,7 +37,7 @@ final class VideoRenderer: @unchecked Sendable {
                     try self.renderSynchronously(
                         sourceURL: sourceURL,
                         destinationURL: destinationURL,
-                        frameURL: frameURL,
+                        assets: assets,
                         frame: frame,
                         settings: settings,
                         job: job,
@@ -54,7 +54,7 @@ final class VideoRenderer: @unchecked Sendable {
     private func renderSynchronously(
         sourceURL: URL,
         destinationURL: URL,
-        frameURL: URL,
+        assets: FrameRenderAssets,
         frame: DeviceFrame,
         settings: RenderSettings,
         job: VideoRenderJob,
@@ -67,12 +67,8 @@ final class VideoRenderer: @unchecked Sendable {
         guard let videoTrack = asset.tracks(withMediaType: .video).first else {
             throw SimFrameError.missingVideoTrack
         }
-        guard let frameImage = CIImage(contentsOf: frameURL, options: [.applyOrientationProperty: true]) else {
-            throw SimFrameError.invalidFrame("Unable to decode the selected frame")
-        }
-
         let geometry = CompositionGeometry(frame: frame, preset: settings.canvasPreset)
-        let preparedFrame = try CompositionRenderer.prepareFrame(frameImage, geometry: geometry)
+        let preparedFrame = CompositionRenderer.prepareFrame(assets: assets, geometry: geometry)
         let temporaryURL = FileManager.default.temporaryDirectory.appendingPathComponent(
             "SimFrame-\(UUID().uuidString).\(settings.exportFormat.fileExtension)"
         )
