@@ -159,6 +159,50 @@ struct FrameImportReport: Sendable {
     var skippedFiles: [String]
 }
 
+enum FrameImportPhase: Equatable, Sendable {
+    case scanning
+    case processing(completed: Int, total: Int)
+    case installing
+    case loadingSelection
+    case cancelling
+
+    var isCancellable: Bool {
+        switch self {
+        case .scanning, .processing:
+            true
+        case .installing, .loadingSelection, .cancelling:
+            false
+        }
+    }
+
+    var detailText: String {
+        switch self {
+        case .scanning:
+            "Scanning frame folder…"
+        case let .processing(completed, total):
+            "Preparing device frame \(completed) of \(total)…"
+        case .installing:
+            "Installing device frame library…"
+        case .loadingSelection:
+            "Loading first device frame…"
+        case .cancelling:
+            "Cancelling import…"
+        }
+    }
+
+    var fractionCompleted: Double? {
+        switch self {
+        case let .processing(completed, total):
+            guard total > 0 else { return 0 }
+            return min(max(Double(completed) / Double(total), 0), 1)
+        case .installing, .loadingSelection:
+            return 1
+        case .scanning, .cancelling:
+            return nil
+        }
+    }
+}
+
 struct FrameRenderAssets: @unchecked Sendable {
     let artwork: CGImage
     let screenMask: CGImage

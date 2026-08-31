@@ -149,7 +149,7 @@ final class VideoPlaybackController {
 @MainActor
 @Observable
 final class AppState {
-    private let libraryService: FrameLibraryService
+    private let libraryService: any FrameLibraryServing
     private let imageRenderer: ImageRenderer
     private let videoRenderer: VideoRenderer
     private let recentStore: RecentCaptureStore
@@ -157,12 +157,14 @@ final class AppState {
     @ObservationIgnored private var captureAccessIsActive = false
     @ObservationIgnored private var currentVideoJob: VideoRenderJob?
     private var selectedAssets: FrameRenderAssets?
+    @ObservationIgnored private var frameImportTask: Task<Void, Never>?
     @ObservationIgnored private var frameLoadTask: Task<Void, Never>?
     @ObservationIgnored private var previewTask: Task<Void, Never>?
     @ObservationIgnored private var resizeTask: Task<Void, Never>?
     @ObservationIgnored private var copyTask: Task<Void, Never>?
     @ObservationIgnored private var selectionRequests = LatestRequestGeneration()
     @ObservationIgnored private var previewRequests = LatestRequestGeneration()
+    @ObservationIgnored private var frameImportRequests = LatestRequestGeneration()
     @ObservationIgnored private var previewViewportPixels = CGSize(width: 1_600, height: 1_200)
 
     var manifest: FrameLibraryManifest?
@@ -176,7 +178,7 @@ final class AppState {
     var videoPlayer: AVPlayer?
     let videoPlaybackController = VideoPlaybackController()
     var recentCaptures: [RecentCaptureRecord] = []
-    var isImportingFrames = false
+    var frameImportPhase: FrameImportPhase?
     var isExporting = false
     var isCopying = false
     var exportProgress = 0.0
@@ -185,7 +187,7 @@ final class AppState {
     var importWarnings: [String] = []
 
     init(
-        libraryService: FrameLibraryService = FrameLibraryService(),
+        libraryService: any FrameLibraryServing = FrameLibraryService(),
         imageRenderer: ImageRenderer = ImageRenderer(),
         videoRenderer: VideoRenderer = VideoRenderer()
     ) {
@@ -216,12 +218,15 @@ final class AppState {
     var canCopyImage: Bool {
         capture?.kind == .image && selectedFrame != nil && selectedAssets != nil && !isCopying
     }
+    var isImportingFrames: Bool { frameImportPhase != nil }
+    var canCancelFrameImport: Bool { frameImportPhase?.isCancellable == true }
     var cropWarning: Bool {
         guard let capture, let selectedFrame else { return false }
         return DeviceDetector.needsCropping(captureSize: capture.pixelSize, frame: selectedFrame)
     }
 
     func chooseFrameLibrary() {
+        guard !isImportingFrames else { return }
         let panel = NSOpenPanel()
         panel.title = manifest == nil ? "Import Apple Device Frames" : "Replace Device Frame Library"
         panel.prompt = "Import"
@@ -233,24 +238,49 @@ final class AppState {
     }
 
     func importFrameLibrary(from url: URL) {
-        isImportingFrames = true
+        guard frameImportTask == nil, frameImportPhase == nil else { return }
+        videoPlaybackController.pauseForFrameChange()
+        let request = frameImportRequests.begin()
+        frameImportPhase = .scanning
         errorMessage = nil
-        statusMessage = "Preparing device frame masks…"
-        Task {
+        statusMessage = FrameImportPhase.scanning.detailText
+        let service = libraryService
+        frameImportTask = Task { [weak self] in
             do {
-                let report = try await libraryService.importLibrary(from: url)
+                let report = try await service.importLibrary(from: url) { [weak self] phase in
+                    guard let self else { return }
+                    await self.updateFrameImportPhase(phase, request: request)
+                }
+                guard let self, frameImportRequests.accepts(request) else { return }
                 manifest = report.manifest
                 importWarnings = report.skippedFiles
                 selectedFrameID = report.manifest.frames.first?.id
                 settings.frameID = selectedFrameID
-                isImportingFrames = false
-                statusMessage = "Imported \(report.manifest.frames.count) device frames."
-                beginSelectedFrameLoad()
+                frameImportPhase = .loadingSelection
+                statusMessage = FrameImportPhase.loadingSelection.detailText
+                beginSelectedFrameLoad(
+                    completingImport: request,
+                    importedFrameCount: report.manifest.frames.count
+                )
+            } catch is CancellationError {
+                guard let self, frameImportRequests.accepts(request) else { return }
+                frameImportTask = nil
+                frameImportPhase = nil
+                statusMessage = "Import cancelled. Existing device frames were kept."
             } catch {
-                isImportingFrames = false
+                guard let self, frameImportRequests.accepts(request) else { return }
+                frameImportTask = nil
+                frameImportPhase = nil
                 present(error)
             }
         }
+    }
+
+    func cancelFrameImport() {
+        guard canCancelFrameImport, let frameImportTask else { return }
+        frameImportPhase = .cancelling
+        statusMessage = FrameImportPhase.cancelling.detailText
+        frameImportTask.cancel()
     }
 
     func chooseCapture() {
@@ -582,7 +612,10 @@ final class AppState {
         }
     }
 
-    private func beginSelectedFrameLoad() {
+    private func beginSelectedFrameLoad(
+        completingImport importRequest: Int? = nil,
+        importedFrameCount: Int? = nil
+    ) {
         if capture?.kind == .video {
             videoPlaybackController.pauseForFrameChange()
         }
@@ -595,7 +628,12 @@ final class AppState {
         selectedFrameImage = nil
         selectedFrameMaskImage = nil
         if capture?.kind == .image { previewImage = nil }
-        guard let frame = selectedFrame else { return }
+        guard let frame = selectedFrame else {
+            if let importRequest, let importedFrameCount {
+                finishFrameImport(request: importRequest, importedFrameCount: importedFrameCount)
+            }
+            return
+        }
 
         frameLoadTask = Task { [weak self] in
             do {
@@ -613,13 +651,36 @@ final class AppState {
                     size: NSSize(width: assets.screenMask.width, height: assets.screenMask.height)
                 )
                 refreshPreview()
+                if let importRequest, let importedFrameCount {
+                    finishFrameImport(request: importRequest, importedFrameCount: importedFrameCount)
+                }
             } catch is CancellationError {
+                if let self, let importRequest, let importedFrameCount {
+                    finishFrameImport(request: importRequest, importedFrameCount: importedFrameCount)
+                }
                 return
             } catch {
                 guard let self, selectionRequests.accepts(request) else { return }
+                if let importRequest, frameImportRequests.accepts(importRequest) {
+                    frameImportTask = nil
+                    frameImportPhase = nil
+                }
                 present(error)
             }
         }
+    }
+
+    private func updateFrameImportPhase(_ phase: FrameImportPhase, request: Int) {
+        guard frameImportRequests.accepts(request), frameImportPhase != .cancelling else { return }
+        frameImportPhase = phase
+        statusMessage = phase.detailText
+    }
+
+    private func finishFrameImport(request: Int, importedFrameCount: Int) {
+        guard frameImportRequests.accepts(request) else { return }
+        frameImportTask = nil
+        frameImportPhase = nil
+        statusMessage = "Imported \(importedFrameCount) device frames."
     }
 
     private func present(_ error: Error) {

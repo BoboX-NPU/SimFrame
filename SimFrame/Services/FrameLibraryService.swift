@@ -5,7 +5,18 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-actor FrameLibraryService {
+typealias FrameImportProgressHandler = @Sendable (FrameImportPhase) async -> Void
+
+protocol FrameLibraryServing: Actor {
+    func loadManifest() throws -> FrameLibraryManifest?
+    func assets(for frame: DeviceFrame) throws -> FrameRenderAssets
+    func importLibrary(
+        from sourceDirectory: URL,
+        progress: FrameImportProgressHandler
+    ) async throws -> FrameImportReport
+}
+
+actor FrameLibraryService: FrameLibraryServing {
     private struct CacheEntry {
         let assets: FrameRenderAssets
         let cost: Int
@@ -83,10 +94,15 @@ actor FrameLibraryService {
         return assets
     }
 
-    func importLibrary(from sourceDirectory: URL) throws -> FrameImportReport {
+    func importLibrary(
+        from sourceDirectory: URL,
+        progress: FrameImportProgressHandler = { _ in }
+    ) async throws -> FrameImportReport {
         let accessed = sourceDirectory.startAccessingSecurityScopedResource()
         defer { if accessed { sourceDirectory.stopAccessingSecurityScopedResource() } }
 
+        await progress(.scanning)
+        try Task.checkCancellation()
         try fileManager.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         let staging = baseDirectory.appendingPathComponent(".FrameLibrary-\(UUID().uuidString)", isDirectory: true)
         let framesDirectory = staging.appendingPathComponent("Frames", isDirectory: true)
@@ -94,13 +110,16 @@ actor FrameLibraryService {
 
         do {
             let candidates = try pngFiles(in: sourceDirectory)
+            try Task.checkCancellation()
+            await progress(.processing(completed: 0, total: candidates.count))
             var frames: [DeviceFrame] = []
             var skipped: [String] = []
             var usedIDs = Set<String>()
             let masksDirectory = staging.appendingPathComponent("Masks", isDirectory: true)
             try fileManager.createDirectory(at: masksDirectory, withIntermediateDirectories: true)
 
-            for source in candidates {
+            for (index, source) in candidates.enumerated() {
+                try Task.checkCancellation()
                 do {
                     let frame = try autoreleasepool { () throws -> DeviceFrame in
                         let artwork = try loadImage(
@@ -141,6 +160,8 @@ actor FrameLibraryService {
                 } catch {
                     skipped.append("\(source.lastPathComponent): \(error.localizedDescription)")
                 }
+                await progress(.processing(completed: index + 1, total: candidates.count))
+                try Task.checkCancellation()
             }
 
             guard !frames.isEmpty else { throw SimFrameError.noUsableFrames }
@@ -155,6 +176,9 @@ actor FrameLibraryService {
                 frames: frames
             )
             let manifestData = try encoder.encode(manifest)
+            try Task.checkCancellation()
+            await progress(.installing)
+            try Task.checkCancellation()
             try manifestData.write(to: staging.appendingPathComponent("manifest.json"), options: .atomic)
             try install(staging: staging)
             clearAssetCache()

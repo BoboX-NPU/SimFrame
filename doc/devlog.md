@@ -546,3 +546,37 @@ Append project changes to this file in chronological order. See `current.md` for
 - A first import or missing-mask repair still performs full-resolution Alpha analysis and PNG encoding on one background CPU core. This work is intentionally completed once and cached.
 - The onboarding UI test still needs reevaluation after the macOS 27/Xcode runner stops targeting the stale suspended application process.
 - Two existing local-fixture tests could not be repeated after the final hot-loop cleanup because this host blocked while accessing their Apple artwork under `Downloads`; an earlier full run passed both.
+
+## 2026-08-31 — Added Device Frame Import Progress
+
+### Change Summary
+
+- Added concurrent import phases for scanning, determinate per-file preparation, installation, first-frame loading, and cancellation cleanup.
+- Made Device Frame library import asynchronous with monotonic progress callbacks and cancellation checks around directory enumeration, every candidate PNG, and atomic installation.
+- Added application-owned import task and request-generation state to reject duplicate imports and stale callbacks, pause video without resetting its timeline, and keep the overlay visible until the first artwork and mask are ready.
+- Added a centered window-level material overlay that preserves the old preview underneath while disabling the workspace, inspector, toolbar, drag-and-drop surface, and Device Frame Pickers.
+- Added safe cancellation before installation. The staging library is removed before the overlay closes, and the existing manifest, frames, and masks remain installed after cancellation or failure.
+
+### Affected Files
+
+- `SimFrame/Models/Models.swift`
+- `SimFrame/Services/FrameLibraryService.swift`
+- `SimFrame/Stores/AppState.swift`
+- `SimFrame/Views/MainView.swift`
+- `SimFrameTests/FrameLibraryTests.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran the four initial focused import regressions; all 4 passed with 0 failures in 0.513 seconds. Coverage included monotonic progress through an invalid PNG, cancellation cleanup with exact existing-library preservation, duplicate-request blocking, first-frame loading, and stale callback rejection.
+- Added and ran a focused first-frame asset failure regression; it passed with 0 failures in 0.085 seconds and confirmed that the overlay closes while the load error is presented.
+- Ran the final complete unit/media suite; all 36 tests executed with 1 opt-in import benchmark skipped and 0 failures in 11.747 seconds. The local iPhone 17 scan, rounded frame, transparent MOV, audio, mask, rendering, playback, and import regressions all passed.
+- Ran the full macOS test command before the final failure-path test was added. Its then-current 35 unit/media tests passed with 1 skip and 0 failures, but the onboarding UI test failed before assertions because Xcode could not terminate stale reported SimFrame PID `78349`.
+- Ran `./script/build_and_run.sh --verify`; the target built successfully, launched, and passed process verification.
+- Inspected the running app while replacing the real 30-frame library. The window-level overlay appeared immediately, disabled the underlying workspace and toolbar, showed determinate progress at `0 of 30` and `19 of 30`, and remained until the new selection was usable. A second import cancelled safely and continued to show the existing library.
+- Opened a real video, sought to a nonzero position, started playback, and began a library replacement. Import paused the video with its controls visible beneath the overlay, and cancellation retained the 11.62-second timeline position.
+
+### Risks or Follow-up Work
+
+- The onboarding UI test remains blocked by the existing Xcode stale-process termination problem; the running app and import overlay were inspected directly instead.
