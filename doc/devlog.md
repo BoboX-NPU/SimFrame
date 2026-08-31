@@ -606,3 +606,36 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - No application screenshots are currently stored in the repository, so the README does not include a visual preview.
+
+## 2026-08-31 — Added Flat App Icon Concepts
+
+### Change Summary
+
+- Generated ten original flat app-icon concepts based on SimFrame's device-framing, media import, masking, export, and orientation features.
+- Kept the concepts visually simple with front-facing geometry, restrained blue and cyan colors, and no text, Apple logo, 3D extrusion, glass, metal, or realistic hardware details.
+- Stored each concept as a separate 1024-by-1024 PNG candidate without assigning any candidate to the application target.
+
+### Affected Files
+
+- `SimFrame/Resources/AppIconConcepts/01-nested-frame.png`
+- `SimFrame/Resources/AppIconConcepts/02-auto-frame.png`
+- `SimFrame/Resources/AppIconConcepts/03-content-insertion.png`
+- `SimFrame/Resources/AppIconConcepts/04-photo-video.png`
+- `SimFrame/Resources/AppIconConcepts/05-continuous-frame.png`
+- `SimFrame/Resources/AppIconConcepts/06-export.png`
+- `SimFrame/Resources/AppIconConcepts/07-layered-mask.png`
+- `SimFrame/Resources/AppIconConcepts/08-drop-in.png`
+- `SimFrame/Resources/AppIconConcepts/09-aperture.png`
+- `SimFrame/Resources/AppIconConcepts/10-orientation.png`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Inspected all ten generated concepts during generation for flat style, subject clarity, and absence of text or logos.
+- Verified all ten final files as 1024-by-1024 RGBA PNG images with Alpha channels.
+- Build and tests: Not run because the concepts are not assigned to the application target and this change does not modify application code or build configuration.
+
+### Risks or Follow-up Work
+
+- A final concept still needs to be selected, refined at small display sizes, converted into an App Icon asset catalog, and validated in a running app before use.
