@@ -241,7 +241,6 @@ struct VideoPlaybackControls: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .keyboardShortcut(.space, modifiers: [])
             .help(isPlaying ? "Pause (Space)" : "Play (Space)")
 
             Text(formattedTime(currentTime))
@@ -285,6 +284,10 @@ struct VideoPlaybackControls: View {
         }
         .shadow(color: .black.opacity(0.24), radius: 8, y: 3)
         .accessibilityIdentifier("video-playback-controls")
+        .background {
+            SpaceKeyPlaybackShortcut(action: togglePlayback)
+                .frame(width: 0, height: 0)
+        }
         .task(id: ObjectIdentifier(player)) {
             while !Task.isCancelled {
                 refreshPlaybackState()
@@ -346,6 +349,80 @@ struct VideoPlaybackControls: View {
             return String(format: "%d:%02d:%02d", hours, minutes, remainingSeconds)
         }
         return String(format: "%d:%02d", minutes, remainingSeconds)
+    }
+}
+
+struct SpaceKeyPlaybackShortcut: NSViewRepresentable {
+    let action: @MainActor () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.startMonitoring(hostView: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.action = action
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stopMonitoring()
+    }
+
+    static func shouldHandleSpaceKey(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        isRepeat: Bool
+    ) -> Bool {
+        let conflictingModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+        return keyCode == 49
+            && modifierFlags.intersection(conflictingModifiers).isEmpty
+            && !isRepeat
+    }
+
+    @MainActor
+    final class Coordinator {
+        var action: @MainActor () -> Void
+        private weak var hostView: NSView?
+        private var eventMonitor: Any?
+
+        init(action: @escaping @MainActor () -> Void) {
+            self.action = action
+        }
+
+        func startMonitoring(hostView: NSView) {
+            self.hostView = hostView
+            guard eventMonitor == nil else { return }
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self,
+                      let window = self.hostView?.window,
+                      event.window === window,
+                      event.keyCode == 49 else {
+                    return event
+                }
+
+                let conflictingModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+                guard event.modifierFlags.intersection(conflictingModifiers).isEmpty else {
+                    return event
+                }
+                guard !event.isARepeat else { return nil }
+
+                self.action()
+                return nil
+            }
+        }
+
+        func stopMonitoring() {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+                self.eventMonitor = nil
+            }
+            hostView = nil
+        }
     }
 }
 

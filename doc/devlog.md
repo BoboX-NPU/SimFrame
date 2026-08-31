@@ -387,3 +387,30 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - None.
+
+## 2026-08-31 — Prevented Space-Key Pause from Resuming
+
+### Change Summary
+
+- Confirmed that pointer-driven pause remains stable and isolated the automatic resume behavior to the SwiftUI button shortcut path.
+- Replaced the button-level Space shortcut with a narrow, window-scoped AppKit key-down bridge that invokes the existing SwiftUI playback action.
+- Consumed unmodified Space events, ignored automatic key repeats, and allowed modified or unrelated key events to continue through the responder chain.
+- Added regression coverage for a single unmodified Space press, repeated Space events, modified Space events, and unrelated keys.
+
+### Affected Files
+
+- `SimFrame/Views/DropPreviewView.swift`
+- `SimFrameTests/VideoRendererTests.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran three focused playback-preview tests with `xcodebuild`; all 3 passed with 0 failures.
+- Ran 19 reproducible unit and media tests with `xcodebuild`; all 19 passed with 0 failures. The local 30-frame library scan and high-resolution HEVC with Alpha audio fixture were excluded.
+- Ran `./script/build_and_run.sh --verify`; the build succeeded and the updated app process was verified.
+- Inspected the running app with a recent video capture. Space started playback, the next Space press paused at 8.072011667 seconds, and the timeline remained unchanged after a three-second wait.
+
+### Risks or Follow-up Work
+
+- None.

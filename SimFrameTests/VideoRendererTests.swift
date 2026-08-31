@@ -31,6 +31,29 @@ final class VideoRendererTests: XCTestCase {
         XCTAssertEqual(VideoPreviewLayout.playbackControlIconSize, 17)
     }
 
+    func testSpacePlaybackShortcutRejectsRepeatsAndModifiedKeys() {
+        XCTAssertTrue(SpaceKeyPlaybackShortcut.shouldHandleSpaceKey(
+            keyCode: 49,
+            modifierFlags: [],
+            isRepeat: false
+        ))
+        XCTAssertFalse(SpaceKeyPlaybackShortcut.shouldHandleSpaceKey(
+            keyCode: 49,
+            modifierFlags: [],
+            isRepeat: true
+        ))
+        XCTAssertFalse(SpaceKeyPlaybackShortcut.shouldHandleSpaceKey(
+            keyCode: 49,
+            modifierFlags: .command,
+            isRepeat: false
+        ))
+        XCTAssertFalse(SpaceKeyPlaybackShortcut.shouldHandleSpaceKey(
+            keyCode: 36,
+            modifierFlags: [],
+            isRepeat: false
+        ))
+    }
+
     func testTargetBitRatePreservesSourceQualityAcrossLargerCanvas() {
         let sourceSize = CGSize(width: 1_206, height: 2_622)
         let outputSize = CGSize(width: 1_320, height: 2_868)
