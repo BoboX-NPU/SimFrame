@@ -268,60 +268,32 @@ enum CompositionRenderer {
     }
 
     static func makeScreenMask(frameImage: CGImage, frame: DeviceFrame) throws -> CGImage {
-        let width = frameImage.width
-        let height = frameImage.height
+        try makeScreenMask(analysis: FrameScanner.analyze(image: frameImage), frame: frame)
+    }
+
+    static func makeScreenMask(
+        analysis: FrameScanner.AlphaAnalysis,
+        frame: DeviceFrame
+    ) throws -> CGImage {
+        let width = analysis.width
+        let height = analysis.height
         guard width > 0, height > 0 else {
             throw SimFrameError.invalidFrame("Unable to inspect the selected frame aperture")
         }
-        let bytesPerRow = width * 4
-        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
-        guard let context = CGContext(
-            data: &pixels,
+        let exterior = connectedExteriorRegion(
+            alpha: analysis.alpha,
             width: width,
             height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            throw SimFrameError.invalidFrame("Unable to inspect the selected frame aperture")
-        }
-        context.translateBy(x: 0, y: CGFloat(height))
-        context.scaleBy(x: 1, y: -1)
-        context.draw(frameImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        var alpha = [UInt8](repeating: 0, count: width * height)
-        for index in alpha.indices { alpha[index] = pixels[index * 4 + 3] }
-
-        guard let apertureSeed = nearestTransparentSeed(
-            alpha: alpha,
-            width: width,
-            height: height,
-            center: CGPoint(x: frame.screenRect.midX, y: frame.screenRect.midY)
-        ) else {
-            throw SimFrameError.invalidFrame("Unable to isolate the selected frame aperture")
-        }
-        let aperture = connectedRegion(
-            alpha: alpha,
-            width: width,
-            height: height,
-            seeds: [apertureSeed],
-            maximumAlpha: 8
-        )
-        let exterior = connectedRegion(
-            alpha: alpha,
-            width: width,
-            height: height,
-            seeds: borderPixels(width: width, height: height),
             maximumAlpha: 247
         )
-        let silhouette = orthogonalSpanHull(
-            aperture: aperture,
+        var expanded = orthogonalSpanHull(
+            aperture: analysis.aperture,
             width: width,
             height: height,
             screenRect: frame.screenRect.integral
         )
-        let expanded = dilated(
-            silhouette,
+        dilate(
+            &expanded,
             width: width,
             height: height,
             radius: apertureOverlapRadius
@@ -346,63 +318,114 @@ enum CompositionRenderer {
         let maxY = min(height - 1, Int(screenRect.maxY) - 1)
         var hull = aperture
         guard minX <= maxX, minY <= maxY else { return hull }
-
-        for y in minY...maxY {
-            var first: Int?
-            var last: Int?
-            for x in minX...maxX where aperture[y * width + x] != 0 {
-                first = first ?? x
-                last = x
-            }
-            if let first, let last {
-                for x in first...last { hull[y * width + x] = 1 }
-            }
-        }
-        for x in minX...maxX {
-            var first: Int?
-            var last: Int?
-            for y in minY...maxY where aperture[y * width + x] != 0 {
-                first = first ?? y
-                last = y
-            }
-            if let first, let last {
-                for y in first...last { hull[y * width + x] = 1 }
+        aperture.withUnsafeBufferPointer { apertureBuffer in
+            hull.withUnsafeMutableBufferPointer { hullBuffer in
+                let aperturePixels = apertureBuffer.baseAddress!
+                let hullPixels = hullBuffer.baseAddress!
+                var y = minY
+                while y <= maxY {
+                    let row = y * width
+                    var first = -1
+                    var last = -1
+                    var x = minX
+                    while x <= maxX {
+                        if aperturePixels[row + x] != 0 {
+                            if first < 0 { first = x }
+                            last = x
+                        }
+                        x += 1
+                    }
+                    if first >= 0 {
+                        x = first
+                        while x <= last {
+                            hullPixels[row + x] = 1
+                            x += 1
+                        }
+                    }
+                    y += 1
+                }
+                var x = minX
+                while x <= maxX {
+                    var first = -1
+                    var last = -1
+                    y = minY
+                    while y <= maxY {
+                        if aperturePixels[y * width + x] != 0 {
+                            if first < 0 { first = y }
+                            last = y
+                        }
+                        y += 1
+                    }
+                    if first >= 0 {
+                        y = first
+                        while y <= last {
+                            hullPixels[y * width + x] = 1
+                            y += 1
+                        }
+                    }
+                    x += 1
+                }
             }
         }
         return hull
     }
 
-    private static func dilated(_ flags: [UInt8], width: Int, height: Int, radius: Int) -> [UInt8] {
-        guard radius > 0 else { return flags }
+    private static func dilate(_ flags: inout [UInt8], width: Int, height: Int, radius: Int) {
+        guard radius > 0 else { return }
         var horizontal = [UInt8](repeating: 0, count: flags.count)
-        for y in 0..<height {
-            var includedCount = 0
-            for x in 0...min(width - 1, radius) where flags[y * width + x] != 0 {
-                includedCount += 1
-            }
-            for x in 0..<width {
-                horizontal[y * width + x] = includedCount > 0 ? 1 : 0
-                let outgoing = x - radius
-                if outgoing >= 0, flags[y * width + outgoing] != 0 { includedCount -= 1 }
-                let incoming = x + radius + 1
-                if incoming < width, flags[y * width + incoming] != 0 { includedCount += 1 }
+        flags.withUnsafeBufferPointer { flagBuffer in
+            horizontal.withUnsafeMutableBufferPointer { horizontalBuffer in
+                let source = flagBuffer.baseAddress!
+                let destination = horizontalBuffer.baseAddress!
+                var y = 0
+                while y < height {
+                    let row = y * width
+                    var includedCount = 0
+                    var x = 0
+                    let initialEnd = min(width - 1, radius)
+                    while x <= initialEnd {
+                        if source[row + x] != 0 { includedCount += 1 }
+                        x += 1
+                    }
+                    x = 0
+                    while x < width {
+                        destination[row + x] = includedCount > 0 ? 1 : 0
+                        let outgoing = x - radius
+                        if outgoing >= 0, source[row + outgoing] != 0 { includedCount -= 1 }
+                        let incoming = x + radius + 1
+                        if incoming < width, source[row + incoming] != 0 { includedCount += 1 }
+                        x += 1
+                    }
+                    y += 1
+                }
             }
         }
-        var result = [UInt8](repeating: 0, count: flags.count)
-        for x in 0..<width {
-            var includedCount = 0
-            for y in 0...min(height - 1, radius) where horizontal[y * width + x] != 0 {
-                includedCount += 1
-            }
-            for y in 0..<height {
-                result[y * width + x] = includedCount > 0 ? 1 : 0
-                let outgoing = y - radius
-                if outgoing >= 0, horizontal[outgoing * width + x] != 0 { includedCount -= 1 }
-                let incoming = y + radius + 1
-                if incoming < height, horizontal[incoming * width + x] != 0 { includedCount += 1 }
+        horizontal.withUnsafeBufferPointer { horizontalBuffer in
+            flags.withUnsafeMutableBufferPointer { flagBuffer in
+                let source = horizontalBuffer.baseAddress!
+                let destination = flagBuffer.baseAddress!
+                var x = 0
+                while x < width {
+                    var includedCount = 0
+                    var y = 0
+                    let initialEnd = min(height - 1, radius)
+                    while y <= initialEnd {
+                        if source[y * width + x] != 0 { includedCount += 1 }
+                        y += 1
+                    }
+                    y = 0
+                    while y < height {
+                        destination[y * width + x] = includedCount > 0 ? 1 : 0
+                        let outgoing = y - radius
+                        if outgoing >= 0, source[outgoing * width + x] != 0 { includedCount -= 1 }
+                        let incoming = y + radius + 1
+                        if incoming < height, source[incoming * width + x] != 0 { includedCount += 1 }
+                        y += 1
+                    }
+                    x += 1
+                }
             }
         }
-        return result
     }
 
     private static func croppedGrayscaleMask(
@@ -421,16 +444,32 @@ enum CompositionRenderer {
             throw SimFrameError.invalidFrame("Unable to create the selected frame aperture mask")
         }
         let bytesPerRow = maskWidth * 2
-        var bytes = [UInt8](repeating: 0, count: bytesPerRow * maskHeight)
-        for y in 0..<maskHeight {
-            let sourceRow = (minY + y) * frameWidth + minX
-            let destinationRow = y * bytesPerRow
-            for x in 0..<maskWidth where expanded[sourceRow + x] != 0 && exterior[sourceRow + x] == 0 {
-                bytes[destinationRow + x * 2] = 255
-                bytes[destinationRow + x * 2 + 1] = 255
+        var data = Data(count: bytesPerRow * maskHeight)
+        expanded.withUnsafeBufferPointer { expandedBuffer in
+            exterior.withUnsafeBufferPointer { exteriorBuffer in
+                data.withUnsafeMutableBytes { rawBuffer in
+                    let expandedPixels = expandedBuffer.baseAddress!
+                    let exteriorPixels = exteriorBuffer.baseAddress!
+                    let bytes = rawBuffer.bindMemory(to: UInt8.self).baseAddress!
+                    var y = 0
+                    while y < maskHeight {
+                        var source = (minY + y) * frameWidth + minX
+                        var destination = y * bytesPerRow
+                        let sourceEnd = source + maskWidth
+                        while source < sourceEnd {
+                            if expandedPixels[source] != 0, exteriorPixels[source] == 0 {
+                                bytes[destination] = 255
+                                bytes[destination + 1] = 255
+                            }
+                            source += 1
+                            destination += 2
+                        }
+                        y += 1
+                    }
+                }
             }
         }
-        guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+        guard let provider = CGDataProvider(data: data as CFData),
               let image = CGImage(
                   width: maskWidth,
                   height: maskHeight,
@@ -449,81 +488,102 @@ enum CompositionRenderer {
         return image
     }
 
-    private static func nearestTransparentSeed(
+    private static func connectedExteriorRegion(
         alpha: [UInt8],
         width: Int,
         height: Int,
-        center: CGPoint
-    ) -> Int? {
-        let centerX = min(max(Int(center.x.rounded()), 0), width - 1)
-        let centerY = min(max(Int(center.y.rounded()), 0), height - 1)
-        let maxRadius = min(width, height) / 4
-        for radius in 0...maxRadius {
-            let points = [
-                (centerX + radius, centerY), (centerX - radius, centerY),
-                (centerX, centerY + radius), (centerX, centerY - radius)
-            ]
-            for (x, y) in points where x >= 0 && x < width && y >= 0 && y < height {
-                let index = y * width + x
-                if alpha[index] <= 8 { return index }
-            }
-        }
-        return nil
-    }
-
-    private static func borderPixels(width: Int, height: Int) -> [Int] {
-        var pixels = [Int]()
-        pixels.reserveCapacity((width + height) * 2)
-        for x in 0..<width {
-            pixels.append(x)
-            pixels.append((height - 1) * width + x)
-        }
-        if height > 2 {
-            for y in 1..<(height - 1) {
-                pixels.append(y * width)
-                pixels.append(y * width + width - 1)
-            }
-        }
-        return pixels
-    }
-
-    private static func connectedRegion(
-        alpha: [UInt8],
-        width: Int,
-        height: Int,
-        seeds: [Int],
         maximumAlpha: UInt8
     ) -> [UInt8] {
         var included = [UInt8](repeating: 0, count: width * height)
-        var queue = [Int]()
-        queue.reserveCapacity(width * height / 2)
-        for seed in seeds where included[seed] == 0 && alpha[seed] <= maximumAlpha {
-            included[seed] = 1
-            queue.append(seed)
-        }
-        var cursor = 0
-        while cursor < queue.count {
-            let index = queue[cursor]
-            cursor += 1
-            let x = index % width
-            let y = index / width
-            if x > 0 { include(index - 1, alpha: alpha, maximumAlpha: maximumAlpha, in: &included, queue: &queue) }
-            if x + 1 < width { include(index + 1, alpha: alpha, maximumAlpha: maximumAlpha, in: &included, queue: &queue) }
-            if y > 0 { include(index - width, alpha: alpha, maximumAlpha: maximumAlpha, in: &included, queue: &queue) }
-            if y + 1 < height { include(index + width, alpha: alpha, maximumAlpha: maximumAlpha, in: &included, queue: &queue) }
+        let pixelCount = width * height
+        let stack = UnsafeMutablePointer<Int32>.allocate(capacity: pixelCount)
+        defer { stack.deallocate() }
+        alpha.withUnsafeBufferPointer { alphaBuffer in
+            included.withUnsafeMutableBufferPointer { includedBuffer in
+                let alphaPixels = alphaBuffer.baseAddress!
+                let includedPixels = includedBuffer.baseAddress!
+                var stackCount = 0
+                func addSeed(_ seed: Int) {
+                    guard includedPixels[seed] == 0, alphaPixels[seed] <= maximumAlpha else { return }
+                    includedPixels[seed] = 1
+                    stack[stackCount] = Int32(seed)
+                    stackCount += 1
+                }
+                var x = 0
+                while x < width {
+                    addSeed(x)
+                    addSeed((height - 1) * width + x)
+                    x += 1
+                }
+                var y = 1
+                while y + 1 < height {
+                    addSeed(y * width)
+                    addSeed(y * width + width - 1)
+                    y += 1
+                }
+                while stackCount > 0 {
+                    stackCount -= 1
+                    let index = Int(stack[stackCount])
+                    let pixelX = index % width
+                    let pixelY = index / width
+                    if pixelX > 0 {
+                        include(
+                            index - 1,
+                            alpha: alphaPixels,
+                            maximumAlpha: maximumAlpha,
+                            in: includedPixels,
+                            stack: stack,
+                            stackCount: &stackCount
+                        )
+                    }
+                    if pixelX + 1 < width {
+                        include(
+                            index + 1,
+                            alpha: alphaPixels,
+                            maximumAlpha: maximumAlpha,
+                            in: includedPixels,
+                            stack: stack,
+                            stackCount: &stackCount
+                        )
+                    }
+                    if pixelY > 0 {
+                        include(
+                            index - width,
+                            alpha: alphaPixels,
+                            maximumAlpha: maximumAlpha,
+                            in: includedPixels,
+                            stack: stack,
+                            stackCount: &stackCount
+                        )
+                    }
+                    if pixelY + 1 < height {
+                        include(
+                            index + width,
+                            alpha: alphaPixels,
+                            maximumAlpha: maximumAlpha,
+                            in: includedPixels,
+                            stack: stack,
+                            stackCount: &stackCount
+                        )
+                    }
+                }
+            }
         }
         return included
     }
 
+    @inline(__always)
     private static func include(
         _ index: Int,
-        alpha: [UInt8],
+        alpha: UnsafePointer<UInt8>,
         maximumAlpha: UInt8,
-        in included: inout [UInt8],
-        queue: inout [Int]
+        in included: UnsafeMutablePointer<UInt8>,
+        stack: UnsafeMutablePointer<Int32>,
+        stackCount: inout Int
     ) {
         guard included[index] == 0, alpha[index] <= maximumAlpha else { return }
         included[index] = 1
-        queue.append(index)
+        stack[stackCount] = Int32(index)
+        stackCount += 1
     }
 }

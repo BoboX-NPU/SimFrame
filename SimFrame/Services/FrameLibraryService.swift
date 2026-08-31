@@ -102,28 +102,41 @@ actor FrameLibraryService {
 
             for source in candidates {
                 do {
-                    var frame = try FrameScanner.scan(url: source)
-                    if usedIDs.contains(frame.id) {
-                        frame = DeviceFrame(
-                            id: "\(frame.id)-\(shortHash(source.path))",
-                            device: frame.device,
-                            variant: frame.variant,
-                            orientation: frame.orientation,
-                            frameFile: frame.frameFile,
-                            canvasSize: frame.canvasSize,
-                            screenRect: frame.screenRect,
-                            normalizedScreenRect: frame.normalizedScreenRect,
-                            expectedCaptureSizes: frame.expectedCaptureSizes
+                    let frame = try autoreleasepool { () throws -> DeviceFrame in
+                        let artwork = try loadImage(
+                            at: source,
+                            message: "Unable to decode the selected frame"
                         )
+                        let analysis = try FrameScanner.analyze(image: artwork)
+                        var frame = try FrameScanner.scan(url: source, analysis: analysis)
+                        if usedIDs.contains(frame.id) {
+                            frame = DeviceFrame(
+                                id: "\(frame.id)-\(shortHash(source.path))",
+                                device: frame.device,
+                                variant: frame.variant,
+                                orientation: frame.orientation,
+                                frameFile: frame.frameFile,
+                                canvasSize: frame.canvasSize,
+                                screenRect: frame.screenRect,
+                                normalizedScreenRect: frame.normalizedScreenRect,
+                                expectedCaptureSizes: frame.expectedCaptureSizes
+                            )
+                        }
+                        usedIDs.insert(frame.id)
+                        let relativePath = "Frames/\(frame.id).png"
+                        let destination = staging.appendingPathComponent(relativePath)
+                        try fileManager.copyItem(at: source, to: destination)
+                        frame.frameFile = relativePath
+                        let mask = try CompositionRenderer.makeScreenMask(
+                            analysis: analysis,
+                            frame: frame
+                        )
+                        try writeMask(
+                            mask,
+                            to: masksDirectory.appendingPathComponent("\(frame.id).png")
+                        )
+                        return frame
                     }
-                    usedIDs.insert(frame.id)
-                    let relativePath = "Frames/\(frame.id).png"
-                    let destination = staging.appendingPathComponent(relativePath)
-                    try fileManager.copyItem(at: source, to: destination)
-                    frame.frameFile = relativePath
-                    let artwork = try loadImage(at: source, message: "Unable to decode the selected frame")
-                    let mask = try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
-                    try writeMask(mask, to: masksDirectory.appendingPathComponent("\(frame.id).png"))
                     frames.append(frame)
                 } catch {
                     skipped.append("\(source.lastPathComponent): \(error.localizedDescription)")
@@ -175,9 +188,14 @@ actor FrameLibraryService {
             if validMask(at: destination, for: frame) != nil {
                 continue
             }
-            let artwork = try loadImage(at: frameURL(for: frame), message: "Unable to decode the selected frame")
-            let mask = try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
-            try writeMask(mask, to: destination)
+            try autoreleasepool {
+                let artwork = try loadImage(
+                    at: frameURL(for: frame),
+                    message: "Unable to decode the selected frame"
+                )
+                let mask = try CompositionRenderer.makeScreenMask(frameImage: artwork, frame: frame)
+                try writeMask(mask, to: destination)
+            }
         }
     }
 
@@ -288,17 +306,26 @@ actor FrameLibraryService {
 }
 
 enum FrameScanner {
+    struct AlphaAnalysis {
+        let width: Int
+        let height: Int
+        let alpha: [UInt8]
+        let aperture: [UInt8]
+        let screenRect: CGRect
+    }
+
     static func scan(url: URL) throws -> DeviceFrame {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             throw SimFrameError.invalidFrame("Unreadable PNG")
         }
-        guard image.alphaInfo != .none && image.alphaInfo != .noneSkipFirst && image.alphaInfo != .noneSkipLast else {
-            throw SimFrameError.invalidFrame("The PNG has no alpha channel")
-        }
+        return try scan(url: url, analysis: analyze(image: image))
+    }
+
+    static func scan(url: URL, analysis: AlphaAnalysis) throws -> DeviceFrame {
         let parsed = try parseFilename(url.deletingPathExtension().lastPathComponent)
-        let screenRect = try transparentScreenRect(in: image)
-        let canvasSize = CGSize(width: image.width, height: image.height)
+        let screenRect = analysis.screenRect
+        let canvasSize = CGSize(width: analysis.width, height: analysis.height)
         let normalized = CGRect(
             x: screenRect.minX / canvasSize.width,
             y: screenRect.minY / canvasSize.height,
@@ -320,18 +347,33 @@ enum FrameScanner {
     }
 
     static func transparentScreenRect(in image: CGImage) throws -> CGRect {
+        try analyze(image: image).screenRect
+    }
+
+    static func analyze(image: CGImage) throws -> AlphaAnalysis {
+        guard image.alphaInfo != .none,
+              image.alphaInfo != .noneSkipFirst,
+              image.alphaInfo != .noneSkipLast else {
+            throw SimFrameError.invalidFrame("The PNG has no alpha channel")
+        }
         let width = image.width
         let height = image.height
-        let bytesPerRow = width * 4
-        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+        let (pixelCount, pixelCountOverflow) = width.multipliedReportingOverflow(by: height)
+        guard width > 0,
+              height > 0,
+              !pixelCountOverflow,
+              pixelCount <= Int(Int32.max) else {
+            throw SimFrameError.invalidFrame("Unable to inspect alpha channel")
+        }
+        var alpha = [UInt8](repeating: 0, count: pixelCount)
         guard let context = CGContext(
-            data: &pixels,
+            data: &alpha,
             width: width,
             height: height,
             bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            bytesPerRow: width,
+            space: CGColorSpaceCreateDeviceGray(),
+            bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue
         ) else { throw SimFrameError.invalidFrame("Unable to inspect alpha channel") }
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: 1, y: -1)
@@ -348,7 +390,7 @@ enum FrameScanner {
                 (centerX, centerY + radius), (centerX, centerY - radius)
             ]
             for (x, y) in points where x >= 0 && x < width && y >= 0 && y < height {
-                if pixels[y * bytesPerRow + x * 4 + 3] <= threshold {
+                if alpha[y * width + x] <= threshold {
                     seed = y * width + x
                     break
                 }
@@ -356,56 +398,82 @@ enum FrameScanner {
         }
         guard let seed else { throw SimFrameError.invalidFrame("No transparent screen opening near the center") }
 
-        var visited = [UInt8](repeating: 0, count: width * height)
-        var queue = [Int]()
-        queue.reserveCapacity(width * height / 2)
-        queue.append(seed)
-        visited[seed] = 1
-        var cursor = 0
+        var aperture = [UInt8](repeating: 0, count: pixelCount)
+        let stack = UnsafeMutablePointer<Int32>.allocate(capacity: pixelCount)
+        defer { stack.deallocate() }
+        var stackCount = 1
+        stack[0] = Int32(seed)
         var minX = width, minY = height, maxX = 0, maxY = 0, area = 0
         var touchesEdge = false
+        alpha.withUnsafeBufferPointer { alphaBuffer in
+            aperture.withUnsafeMutableBufferPointer { apertureBuffer in
+                let alphaPixels = alphaBuffer.baseAddress!
+                let aperturePixels = apertureBuffer.baseAddress!
+                aperturePixels[seed] = 1
+                while stackCount > 0 {
+                    stackCount -= 1
+                    let index = Int(stack[stackCount])
+                    let x = index % width
+                    let y = index / width
+                    minX = min(minX, x); maxX = max(maxX, x)
+                    minY = min(minY, y); maxY = max(maxY, y)
+                    area += 1
+                    if x == 0 || y == 0 || x == width - 1 || y == height - 1 {
+                        touchesEdge = true
+                    }
 
-        while cursor < queue.count {
-            let index = queue[cursor]
-            cursor += 1
-            let x = index % width
-            let y = index / width
-            minX = min(minX, x); maxX = max(maxX, x)
-            minY = min(minY, y); maxY = max(maxY, y)
-            area += 1
-            if x == 0 || y == 0 || x == width - 1 || y == height - 1 { touchesEdge = true }
-
-            if x > 0 {
-                let neighbor = index - 1
-                if visited[neighbor] == 0, pixels[y * bytesPerRow + (x - 1) * 4 + 3] <= threshold {
-                    visited[neighbor] = 1; queue.append(neighbor)
-                }
-            }
-            if x + 1 < width {
-                let neighbor = index + 1
-                if visited[neighbor] == 0, pixels[y * bytesPerRow + (x + 1) * 4 + 3] <= threshold {
-                    visited[neighbor] = 1; queue.append(neighbor)
-                }
-            }
-            if y > 0 {
-                let neighbor = index - width
-                if visited[neighbor] == 0, pixels[(y - 1) * bytesPerRow + x * 4 + 3] <= threshold {
-                    visited[neighbor] = 1; queue.append(neighbor)
-                }
-            }
-            if y + 1 < height {
-                let neighbor = index + width
-                if visited[neighbor] == 0, pixels[(y + 1) * bytesPerRow + x * 4 + 3] <= threshold {
-                    visited[neighbor] = 1; queue.append(neighbor)
+                    if x > 0 {
+                        let neighbor = index - 1
+                        if aperturePixels[neighbor] == 0, alphaPixels[neighbor] <= threshold {
+                            aperturePixels[neighbor] = 1
+                            stack[stackCount] = Int32(neighbor)
+                            stackCount += 1
+                        }
+                    }
+                    if x + 1 < width {
+                        let neighbor = index + 1
+                        if aperturePixels[neighbor] == 0, alphaPixels[neighbor] <= threshold {
+                            aperturePixels[neighbor] = 1
+                            stack[stackCount] = Int32(neighbor)
+                            stackCount += 1
+                        }
+                    }
+                    if y > 0 {
+                        let neighbor = index - width
+                        if aperturePixels[neighbor] == 0, alphaPixels[neighbor] <= threshold {
+                            aperturePixels[neighbor] = 1
+                            stack[stackCount] = Int32(neighbor)
+                            stackCount += 1
+                        }
+                    }
+                    if y + 1 < height {
+                        let neighbor = index + width
+                        if aperturePixels[neighbor] == 0, alphaPixels[neighbor] <= threshold {
+                            aperturePixels[neighbor] = 1
+                            stack[stackCount] = Int32(neighbor)
+                            stackCount += 1
+                        }
+                    }
                 }
             }
         }
 
-        let minimumArea = width * height / 4
+        let minimumArea = pixelCount / 4
         guard !touchesEdge, area > minimumArea else {
             throw SimFrameError.invalidFrame("The central transparent region is not a closed screen opening")
         }
-        return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+        return AlphaAnalysis(
+            width: width,
+            height: height,
+            alpha: alpha,
+            aperture: aperture,
+            screenRect: CGRect(
+                x: minX,
+                y: minY,
+                width: maxX - minX + 1,
+                height: maxY - minY + 1
+            )
+        )
     }
 
     private static func parseFilename(_ name: String) throws -> (device: String, variant: String, orientation: FrameOrientation) {

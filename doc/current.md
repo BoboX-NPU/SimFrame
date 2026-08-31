@@ -4,7 +4,7 @@ Last updated: 2026-08-31
 
 ## Project Purpose
 
-SimFrame is a local-first macOS utility that composites iOS Simulator screenshots or recordings into user-imported Apple product device frames. All assets and rendering are processed locally.
+SimFrame is a fully local macOS utility that composites iOS Simulator screenshots or recordings into user-imported Apple product device frames. All assets and rendering are processed locally.
 
 ## Technical Baseline
 
@@ -22,6 +22,7 @@ SimFrame is a local-first macOS utility that composites iOS Simulator screenshot
 
 - Imports a local directory of transparent PNG device frames on first launch. Frames are copied to Application Support, original Apple artwork is not stored in the repository, and the manifest remains at schema version 1.
 - Scans the transparent screen opening in each PNG, generates a derived grayscale-alpha mask under `FrameLibrary/Masks`, and preserves the previous frames and masks if replacement fails. Existing libraries automatically rebuild missing, corrupt, or dimensionally invalid masks without requiring re-import.
+- Decodes each frame once during import and shares one compact alpha-only analysis between screen-rectangle detection and mask generation. Central-aperture and exterior flood fills use fixed-width work storage, mask assembly avoids redundant full-frame outputs, and each frame's temporary Core Graphics objects are released before the next frame begins.
 - Opens Simulator screenshots or recordings in PNG, JPEG, HEIC, MOV, and MP4 formats.
 - Automatically matches a device using pixel dimensions, aspect ratio, filename, and the previous selection, while allowing manual device, orientation, and appearance-variant selection.
 - Provides Original, Balanced, and Spacious canvas presets with transparent or solid backgrounds.
@@ -59,16 +60,18 @@ SimFrame is a local-first macOS utility that composites iOS Simulator screenshot
 
 ## Current Validation Status
 
-- The project contains 29 unit and media tests plus 1 UI test. Coverage includes frame scanning and atomic replacement, derived-mask creation and repair, decoded-asset reuse, Dynamic Island and connected-notch masking, rounded exterior transparency, two-pixel bezel overlap, viewport-sized preview rendering, full-resolution output, stale-request rejection, device matching, video orientation, codecs, audio, transparency, playback-position preservation, playback behavior, and target bitrate.
+- The project contains 31 unit and media tests plus 1 UI test. Coverage includes compact shared alpha analysis, an opt-in real 30-frame import benchmark, frame scanning and atomic replacement, derived-mask creation and repair, decoded-asset reuse, Dynamic Island and connected-notch masking, rounded exterior transparency, two-pixel bezel overlap, viewport-sized preview rendering, full-resolution output, stale-request rejection, device matching, video orientation, codecs, audio, transparency, playback-position preservation, playback behavior, and target bitrate. The import benchmark runs only when `SIMFRAME_RUN_IMPORT_PERFORMANCE_TEST=1` so normal test runs do not repeatedly scan and encode the personal high-resolution fixture directory.
 - Standard test command: `xcodebuild -project SimFrame.xcodeproj -scheme SimFrame -destination 'platform=macOS' test`
-- On 2026-08-31, all 29 unit and media tests passed with 0 failures in 39.021 seconds. This run included the local 30-frame Apple library scan, the full-resolution iPhone 17 Pro Max PNG regression, the local HEVC with Alpha audio fixture, and the nonzero playback-position preservation regression.
-- On 2026-08-31, `./script/build_and_run.sh --verify` succeeded after the frame-loading and preview changes.
 - A running-app inspection confirmed that all 30 masks were automatically created for the existing library; PNG and video previews preserved rounded exterior clipping while the top-layer device artwork covered Dynamic Island; switching Variant during playback paused at 5.896 seconds without resetting the timeline, and subsequent Device and Orientation changes retained the same position and visible controls; window zoom and restore regenerated a ready preview; and full-resolution Copy became available after frame assets loaded.
 - An eight-second rapid-switch sample showed no alpha flood-fill, mask generation, or full-resolution Core Image output on the main thread. Observed PNG decoding occurred on SwiftUI's background `prepare-image` queue.
+- On 2026-08-31, the real 30-frame Debug import completed in 84.049 seconds and created all 30 masks before the final pointer-only span and dilation loop cleanup. A five-second import sample of the same compact allocation design reported a 73.6 MB physical footprint, a 103.5 MB peak, and approximately 119 MB RSS while retaining one background CPU core for the one-time mask build. The earlier unoptimized running-app sample had reported approximately 401 MB RSS and a 913.2 MB peak physical footprint.
+- After the final hot-loop cleanup, four compact-analysis and mask regressions passed in 0.321 seconds. A final unit/media run executed 29 tests with 1 opt-in benchmark skipped and 0 failures in 3.007 seconds; two existing tests that read frame artwork from `Downloads` were excluded because the local directory enumerator was blocked at 0% CPU during this validation session. An earlier pre-cleanup full run passed all 31 unit and media tests with 0 failures in 100.368 seconds, including the 84.049-second real import.
+- On 2026-08-31, `./script/build_and_run.sh --verify` succeeded after the final hot-loop cleanup. The prior newly launched idle process reported 0% CPU and approximately 122 MB RSS.
 
 ## Outstanding Work
 
 - No confirmed frame-switching, mask, preview, copy, or export blocker is currently known.
 - The onboarding UI test remains unreliable under the current macOS 27/Xcode automation environment. The latest full run and clean focused rerun both failed before assertions because the runner attempted to terminate a stale reported SimFrame PID. The same built app launches, creates its window, and supports direct UI inspection through `build_and_run.sh`; this remains an automation-environment follow-up.
-- The first launch of an existing 30-frame high-resolution library may remain on onboarding while missing masks are generated. In the current local library this one-time migration completed successfully and subsequent launches use the cached masks.
+- Two existing local-fixture tests that read Apple artwork from `Downloads` may block in directory or file access under the current host environment even while the test process remains at 0% CPU. Their most recent successful coverage is retained in the earlier complete run; this is a host-filesystem follow-up rather than a rendering regression.
+- The first launch of an existing 30-frame high-resolution library may remain on onboarding while missing masks are generated. This one-time work remains CPU-bound on one background core, but now uses compact per-frame storage and releases temporary objects between frames; subsequent launches use the cached masks.
 - Existing AVFoundation deprecation warnings remain in `VideoRenderer.swift`; they do not affect the completed validation results.

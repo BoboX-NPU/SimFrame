@@ -511,3 +511,38 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - The onboarding UI test still needs reevaluation when the macOS 27/Xcode automation runner stops targeting a stale application process.
+
+## 2026-08-31 — Reduced Frame Import CPU and Memory Cost
+
+### Change Summary
+
+- Replaced two independent frame decodes and central-aperture scans with one shared alpha analysis per source PNG.
+- Extracted the source Alpha channel directly into a single-channel buffer instead of rendering and retaining a four-channel RGBA inspection buffer.
+- Reused the central aperture flood-fill result for both frame metadata and mask generation.
+- Replaced generic integer flood-fill queues with fixed-width work storage and pointer-based hot loops, while preserving bounds and one-visit-per-pixel behavior.
+- Removed a redundant full-frame dilation output and an extra cropped-mask byte copy.
+- Wrapped every imported or repaired frame in an autorelease pool so temporary Core Graphics and ImageIO objects are released before processing the next frame.
+- Added compact-analysis and optional real 30-frame import regressions.
+
+### Affected Files
+
+- `SimFrame/Services/FrameLibraryService.swift`
+- `SimFrame/Services/ImageRenderer.swift`
+- `SimFrameTests/FrameLibraryTests.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran four focused compact-analysis, rounded-screen, Dynamic Island, and connected-notch tests after the final pointer-only hot-loop cleanup; all 4 passed with 0 failures in 0.321 seconds.
+- Ran the real local 30-frame Debug import regression. The final full-suite run completed the import in 84.049 seconds and created all 30 masks. An earlier same-test intermediate implementation took 114.544 seconds before the sampled hot loops were optimized.
+- Sampled the final 30-frame import for five seconds. The process used one background CPU core, reported a 73.6 MB physical footprint and a 103.5 MB peak, and showed approximately 119 MB RSS at the command-line snapshot. The earlier unoptimized running-app sample had reported approximately 401 MB RSS and a 913.2 MB peak physical footprint.
+- Ran the full macOS test command before the final pointer-only span and dilation loop cleanup. All 31 unit and media tests passed with 0 failures in 100.368 seconds. The UI test failed before assertions because Xcode again attempted to terminate the stale suspended SimFrame PID `12047`.
+- Ran the final unit/media command with the two existing `Downloads`-backed fixture tests excluded after both blocked in host file access at 0% CPU. The remaining run executed 29 tests with the opt-in import benchmark skipped and 0 failures in 3.007 seconds. Dynamic Island, connected notch, rounded clipping, playback-position preservation, PNG output, and video export coverage all passed.
+- Ran `./script/build_and_run.sh --verify` after the final hot-loop cleanup; the macOS app built, launched, and passed process verification. The prior new idle app process reported 0% CPU and approximately 122 MB RSS.
+
+### Risks or Follow-up Work
+
+- A first import or missing-mask repair still performs full-resolution Alpha analysis and PNG encoding on one background CPU core. This work is intentionally completed once and cached.
+- The onboarding UI test still needs reevaluation after the macOS 27/Xcode runner stops targeting the stale suspended application process.
+- Two existing local-fixture tests could not be repeated after the final hot-loop cleanup because this host blocked while accessing their Apple artwork under `Downloads`; an earlier full run passed both.

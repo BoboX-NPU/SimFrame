@@ -19,6 +19,26 @@ final class FrameLibraryTests: XCTestCase {
         XCTAssertEqual(frame.expectedCaptureSizes, [CGSize(width: 320, height: 640)])
     }
 
+    func testCompactAlphaAnalysisFeedsFrameMetadataAndMask() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("Test Phone - Black - Portrait.png")
+        try TestImageFactory.writeFrame(to: url, screenCornerRadius: 48)
+        let image = TestImageFactory.image(at: url)
+
+        let analysis = try FrameScanner.analyze(image: image)
+        let frame = try FrameScanner.scan(url: url, analysis: analysis)
+        let mask = try CompositionRenderer.makeScreenMask(analysis: analysis, frame: frame)
+
+        let pixelCount = image.width * image.height
+        XCTAssertEqual(analysis.alpha.count, pixelCount)
+        XCTAssertEqual(analysis.aperture.count, pixelCount)
+        XCTAssertEqual(frame.screenRect, analysis.screenRect)
+        XCTAssertEqual(mask.width, Int(frame.screenRect.width))
+        XCTAssertEqual(mask.height, Int(frame.screenRect.height))
+    }
+
     func testImportAndFailedReplacementKeepsExistingLibrary() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let valid = root.appendingPathComponent("Valid")
@@ -108,5 +128,30 @@ final class FrameLibraryTests: XCTestCase {
         let pro = try XCTUnwrap(frames.first { $0.device == "iPhone 17 Pro" && $0.orientation == .portrait })
         XCTAssertEqual(pro.canvasSize, CGSize(width: 1350, height: 2760))
         XCTAssertEqual(pro.screenRect, CGRect(x: 72, y: 69, width: 1206, height: 2622))
+    }
+
+    func testLocalIPhone17PackImportsThirtyFramesWhenPresent() async throws {
+        guard ProcessInfo.processInfo.environment["SIMFRAME_RUN_IMPORT_PERFORMANCE_TEST"] == "1" else {
+            throw XCTSkip("Set SIMFRAME_RUN_IMPORT_PERFORMANCE_TEST=1 to run the local 30-frame import benchmark")
+        }
+        let source = URL(fileURLWithPath: "/Users/xuemingbo/Downloads/PNG-iPhone-17")
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            throw XCTSkip("Local Apple frame pack is not present")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = FrameLibraryService(baseDirectory: root.appendingPathComponent("Support"))
+        let start = ContinuousClock.now
+
+        let report = try await service.importLibrary(from: source)
+
+        let elapsed = start.duration(to: .now)
+        XCTAssertEqual(report.manifest.frames.count, 30)
+        let masks = try FileManager.default.contentsOfDirectory(
+            at: root.appendingPathComponent("Support/FrameLibrary/Masks"),
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(masks.filter { $0.pathExtension == "png" }.count, 30)
+        print("Optimized 30-frame import duration: \(elapsed)")
     }
 }
