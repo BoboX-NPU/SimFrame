@@ -27,6 +27,8 @@ final class VideoRendererTests: XCTestCase {
         XCTAssertEqual(controlsWidth, 952)
         XCTAssertGreaterThan(controlsWidth, portraitScreenApertureWidth)
         XCTAssertEqual(VideoPreviewLayout.playbackControlsWidth(availableWidth: 1_600), 1_000)
+        XCTAssertEqual(VideoPreviewLayout.playbackControlButtonSize, 30)
+        XCTAssertEqual(VideoPreviewLayout.playbackControlIconSize, 17)
     }
 
     func testTargetBitRatePreservesSourceQualityAcrossLargerCanvas() {

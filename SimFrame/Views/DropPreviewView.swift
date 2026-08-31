@@ -201,6 +201,8 @@ enum VideoPreviewLayout {
     static let playbackControlsHeight: CGFloat = 44
     static let playbackControlsMinimumWidth: CGFloat = 400
     static let playbackControlsMaximumWidth: CGFloat = 1_000
+    static let playbackControlButtonSize: CGFloat = 30
+    static let playbackControlIconSize: CGFloat = 17
 
     static func playbackControlsWidth(availableWidth: CGFloat) -> CGFloat {
         let proposedWidth = availableWidth - playbackControlsHorizontalInset * 2
@@ -231,10 +233,16 @@ struct VideoPlaybackControls: View {
         HStack(spacing: 10) {
             Button(action: togglePlayback) {
                 Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .frame(width: 16)
+                    .font(.system(size: VideoPreviewLayout.playbackControlIconSize, weight: .semibold))
+                    .frame(
+                        width: VideoPreviewLayout.playbackControlButtonSize,
+                        height: VideoPreviewLayout.playbackControlButtonSize
+                    )
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(isPlaying ? "Pause" : "Play")
+            .keyboardShortcut(.space, modifiers: [])
+            .help(isPlaying ? "Pause (Space)" : "Play (Space)")
 
             Text(formattedTime(currentTime))
                 .monospacedDigit()
@@ -256,7 +264,12 @@ struct VideoPlaybackControls: View {
 
             Button(action: toggleMute) {
                 Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .frame(width: 18)
+                    .font(.system(size: VideoPreviewLayout.playbackControlIconSize, weight: .semibold))
+                    .frame(
+                        width: VideoPreviewLayout.playbackControlButtonSize,
+                        height: VideoPreviewLayout.playbackControlButtonSize
+                    )
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(isMuted ? "Unmute" : "Mute")

@@ -336,3 +336,31 @@ Append project changes to this file in chronological order. See `current.md` for
 ### Risks or Follow-up Work
 
 - The exact 400-point and 1,000-point extremes were verified by layout regression rather than manual window-resize inspection.
+
+## 2026-08-31 — Enlarged Playback Buttons and Added the Space Shortcut
+
+### Change Summary
+
+- Increased the play/pause and mute controls to 30-point interaction targets with 17-point semibold system icons.
+- Registered Space as the play/pause keyboard shortcut on the visible playback button so keyboard and pointer input share the same action.
+- Updated the play/pause help text to expose the Space shortcut.
+- Extended playback-control regression coverage for the new button and icon sizes.
+
+### Affected Files
+
+- `SimFrame/Views/DropPreviewView.swift`
+- `SimFrameTests/VideoRendererTests.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran two focused playback-preview tests with `xcodebuild`; both passed with 0 failures.
+- Ran 18 reproducible unit and media tests with `xcodebuild`; all 18 passed with 0 failures. The local 30-frame library scan and high-resolution HEVC with Alpha audio fixture were excluded.
+- Ran `./script/build_and_run.sh --verify`; the build succeeded and the updated app process was verified.
+- Inspected the running app and confirmed that the larger play/pause and mute controls render correctly.
+- Pressed Space in the running app twice. The first press changed Play to Pause and advanced the timeline; the second changed Pause back to Play and stopped at the current time.
+
+### Risks or Follow-up Work
+
+- None.
