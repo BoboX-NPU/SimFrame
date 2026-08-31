@@ -482,3 +482,32 @@ Append project changes to this file in chronological order. See `current.md` for
 
 - The onboarding UI test needs reevaluation when the macOS 27/Xcode automation environment can launch the app with a window.
 - A first launch that must build all masks for an existing high-resolution 30-frame library can temporarily remain on onboarding; this one-time migration completed successfully in the current local library.
+
+## 2026-08-31 — Preserved Video Position During Frame Changes
+
+### Change Summary
+
+- Moved elapsed time, duration, playback, seeking, and mute state out of the transient playback-controls view into an application-owned playback controller.
+- Made Device, Orientation, and Variant changes pause the active video at its exact current position without publishing an intermediate zero value.
+- Kept the native video surface and playback controls mounted while replacement frame artwork and masks load; only the frame-dependent visual layers now show the preparing placeholder.
+- Preserved the existing outer-screen mask behavior so Dynamic Island, notch, and camera regions remain part of the content aperture and are covered by the final top-layer device artwork.
+
+### Affected Files
+
+- `SimFrame/Stores/AppState.swift`
+- `SimFrame/Views/DropPreviewView.swift`
+- `SimFrameTests/VideoRendererTests.swift`
+- `doc/current.md`
+- `doc/devlog.md`
+
+### Validation Results
+
+- Ran four focused playback and mask regressions with `xcodebuild`; all 4 passed with 0 failures. This included the new nonzero playback-position test plus Dynamic Island and connected-notch coverage.
+- Ran all 29 unit and media tests with the full macOS test command; all 29 passed with 0 failures in 39.021 seconds. The run included the local 30-frame Apple library scan, full-resolution iPhone 17 Pro Max PNG regression, and local HEVC with Alpha audio fixture.
+- The full command's onboarding UI test failed before assertions because Xcode attempted to terminate a stale reported SimFrame PID. Ending the manually launched app and rerunning the UI test alone reproduced the same automation failure.
+- Ran `./script/build_and_run.sh --verify`; the macOS app target built successfully, launched, and passed process verification.
+- Inspected the running app with a real 11.6-second video. Starting at 4.5 seconds and changing Variant during playback paused at 5.896 seconds; Device and Orientation changes then retained 5.896 seconds, the paused state, and the visible controls. The preview also showed content beneath Dynamic Island while the top-layer artwork covered the hardware region.
+
+### Risks or Follow-up Work
+
+- The onboarding UI test still needs reevaluation when the macOS 27/Xcode automation runner stops targeting a stale application process.

@@ -95,7 +95,6 @@ struct DropPreviewView: View {
     @ViewBuilder
     private var videoPreview: some View {
         if let frame = state.selectedFrame,
-           let frameImage = state.selectedFrameImage,
            let player = state.videoPlayer {
             GeometryReader { proxy in
                 let geometry = CompositionGeometry(frame: frame, preset: state.settings.canvasPreset)
@@ -122,29 +121,35 @@ struct DropPreviewView: View {
                                     .resizable()
                                     .interpolation(.high)
                             } else {
-                                RoundedRectangle(
-                                    cornerRadius: min(geometry.screenRect.width, geometry.screenRect.height) * 0.18 * scale
-                                )
+                                Color.clear
                             }
                         }
+                        .opacity(state.selectedFrameMaskImage == nil ? 0 : 1)
                         .position(
                             x: origin.x + geometry.screenRect.midX * scale,
                             y: origin.y + geometry.screenRect.midY * scale
                         )
 
-                    NonInteractiveFrameArtwork(image: frameImage)
-                        .frame(width: geometry.frameRect.width * scale, height: geometry.frameRect.height * scale)
-                        .shadow(
-                            color: .black.opacity(geometry.shadowRadius > 0 ? 0.28 : 0),
-                            radius: geometry.shadowRadius * scale,
-                            y: geometry.shadowOffset * scale
-                        )
-                        .position(
-                            x: origin.x + geometry.frameRect.midX * scale,
-                            y: origin.y + geometry.frameRect.midY * scale
-                        )
+                    if let frameImage = state.selectedFrameImage,
+                       state.selectedFrameMaskImage != nil {
+                        NonInteractiveFrameArtwork(image: frameImage)
+                            .frame(width: geometry.frameRect.width * scale, height: geometry.frameRect.height * scale)
+                            .shadow(
+                                color: .black.opacity(geometry.shadowRadius > 0 ? 0.28 : 0),
+                                radius: geometry.shadowRadius * scale,
+                                y: geometry.shadowOffset * scale
+                            )
+                            .position(
+                                x: origin.x + geometry.frameRect.midX * scale,
+                                y: origin.y + geometry.frameRect.midY * scale
+                            )
+                    } else {
+                        ProgressView("Preparing video preview…")
+                            .frame(width: canvas.width, height: canvas.height)
+                            .position(x: origin.x + canvas.width / 2, y: origin.y + canvas.height / 2)
+                    }
 
-                    VideoPlaybackControls(player: player)
+                    VideoPlaybackControls(controller: state.videoPlaybackController)
                         .frame(width: playbackControlsWidth)
                         .position(
                             x: proxy.size.width / 2,
@@ -239,18 +244,12 @@ enum VideoPreviewLayout {
 }
 
 struct VideoPlaybackControls: View {
-    let player: AVPlayer
-
-    @State private var currentTime = 0.0
-    @State private var duration = 0.0
-    @State private var isPlaying = false
-    @State private var isSeeking = false
-    @State private var isMuted = false
+    @Bindable var controller: VideoPlaybackController
 
     var body: some View {
         HStack(spacing: 10) {
-            Button(action: togglePlayback) {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+            Button(action: controller.togglePlayback) {
+                Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: VideoPreviewLayout.playbackControlIconSize, weight: .semibold))
                     .frame(
                         width: VideoPreviewLayout.playbackControlButtonSize,
@@ -259,28 +258,28 @@ struct VideoPlaybackControls: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(isPlaying ? "Pause (Space)" : "Play (Space)")
+            .help(controller.isPlaying ? "Pause (Space)" : "Play (Space)")
 
-            Text(formattedTime(currentTime))
+            Text(formattedTime(controller.currentTime))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
 
             Slider(
                 value: Binding(
-                    get: { min(currentTime, max(duration, 0)) },
-                    set: { currentTime = $0 }
+                    get: { min(controller.currentTime, max(controller.duration, 0)) },
+                    set: { controller.updateSeekingTime($0) }
                 ),
-                in: 0...max(duration, 1),
-                onEditingChanged: handleSeeking
+                in: 0...max(controller.duration, 1),
+                onEditingChanged: controller.handleSeeking
             )
-            .disabled(duration <= 0)
+            .disabled(controller.duration <= 0)
 
-            Text(formattedTime(duration))
+            Text(formattedTime(controller.duration))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
 
-            Button(action: toggleMute) {
-                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+            Button(action: controller.toggleMute) {
+                Image(systemName: controller.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                     .font(.system(size: VideoPreviewLayout.playbackControlIconSize, weight: .semibold))
                     .frame(
                         width: VideoPreviewLayout.playbackControlButtonSize,
@@ -289,7 +288,7 @@ struct VideoPlaybackControls: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(isMuted ? "Unmute" : "Mute")
+            .help(controller.isMuted ? "Unmute" : "Mute")
         }
         .font(.caption)
         .padding(.horizontal, 14)
@@ -303,57 +302,15 @@ struct VideoPlaybackControls: View {
         .shadow(color: .black.opacity(0.24), radius: 8, y: 3)
         .accessibilityIdentifier("video-playback-controls")
         .background {
-            SpaceKeyPlaybackShortcut(action: togglePlayback)
+            SpaceKeyPlaybackShortcut(action: controller.togglePlayback)
                 .frame(width: 0, height: 0)
         }
-        .task(id: ObjectIdentifier(player)) {
+        .task(id: ObjectIdentifier(controller)) {
             while !Task.isCancelled {
-                refreshPlaybackState()
+                controller.refreshPlaybackState()
                 try? await Task.sleep(for: .milliseconds(200))
             }
         }
-    }
-
-    private func togglePlayback() {
-        if isPlaying {
-            player.pause()
-            isPlaying = false
-            return
-        }
-
-        if duration > 0, currentTime >= duration - 0.05 {
-            currentTime = 0
-            player.seek(to: .zero)
-        }
-        player.play()
-        isPlaying = true
-    }
-
-    private func toggleMute() {
-        player.isMuted.toggle()
-        isMuted = player.isMuted
-    }
-
-    private func handleSeeking(_ editing: Bool) {
-        isSeeking = editing
-        guard !editing else { return }
-        player.seek(
-            to: CMTime(seconds: currentTime, preferredTimescale: 600),
-            toleranceBefore: .zero,
-            toleranceAfter: .zero
-        )
-    }
-
-    private func refreshPlaybackState() {
-        if !isSeeking {
-            let seconds = player.currentTime().seconds
-            currentTime = seconds.isFinite ? max(seconds, 0) : 0
-        }
-
-        let itemDuration = player.currentItem?.duration.seconds ?? 0
-        duration = itemDuration.isFinite ? max(itemDuration, 0) : 0
-        isPlaying = player.timeControlStatus == .playing
-        isMuted = player.isMuted
     }
 
     private func formattedTime(_ seconds: Double) -> String {

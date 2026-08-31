@@ -18,6 +18,135 @@ struct LatestRequestGeneration: Sendable {
 }
 
 @MainActor
+protocol VideoPlaybackSession: AnyObject {
+    var currentSeconds: Double { get }
+    var durationSeconds: Double { get }
+    var isPlaying: Bool { get }
+    var isMuted: Bool { get set }
+
+    func play()
+    func pause()
+    func seek(to seconds: Double)
+}
+
+@MainActor
+private final class AVPlayerPlaybackSession: VideoPlaybackSession {
+    let player: AVPlayer
+
+    init(player: AVPlayer) {
+        self.player = player
+    }
+
+    var currentSeconds: Double { player.currentTime().seconds }
+    var durationSeconds: Double { player.currentItem?.duration.seconds ?? 0 }
+    var isPlaying: Bool { player.timeControlStatus == .playing }
+    var isMuted: Bool {
+        get { player.isMuted }
+        set { player.isMuted = newValue }
+    }
+
+    func play() {
+        player.play()
+    }
+
+    func pause() {
+        player.pause()
+    }
+
+    func seek(to seconds: Double) {
+        player.seek(
+            to: CMTime(seconds: seconds, preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
+    }
+}
+
+@MainActor
+@Observable
+final class VideoPlaybackController {
+    @ObservationIgnored private var session: (any VideoPlaybackSession)?
+
+    private(set) var currentTime = 0.0
+    private(set) var duration = 0.0
+    private(set) var isPlaying = false
+    private(set) var isSeeking = false
+    private(set) var isMuted = false
+
+    func bind(to player: AVPlayer?) {
+        bind(to: player.map { AVPlayerPlaybackSession(player: $0) })
+    }
+
+    func bind(to session: (any VideoPlaybackSession)?) {
+        self.session?.pause()
+        self.session = session
+        currentTime = 0
+        duration = 0
+        isPlaying = false
+        isSeeking = false
+        isMuted = session?.isMuted ?? false
+        refreshPlaybackState()
+    }
+
+    func pauseForFrameChange() {
+        guard let session else { return }
+        session.pause()
+        if session.currentSeconds.isFinite {
+            currentTime = max(session.currentSeconds, 0)
+        }
+        if session.durationSeconds.isFinite {
+            duration = max(session.durationSeconds, 0)
+        }
+        isPlaying = false
+        isMuted = session.isMuted
+    }
+
+    func togglePlayback() {
+        guard let session else { return }
+        if isPlaying || session.isPlaying {
+            session.pause()
+            isPlaying = false
+            return
+        }
+
+        if duration > 0, currentTime >= duration - 0.05 {
+            currentTime = 0
+            session.seek(to: 0)
+        }
+        session.play()
+        isPlaying = true
+    }
+
+    func toggleMute() {
+        guard let session else { return }
+        session.isMuted.toggle()
+        isMuted = session.isMuted
+    }
+
+    func updateSeekingTime(_ seconds: Double) {
+        currentTime = max(seconds, 0)
+    }
+
+    func handleSeeking(_ editing: Bool) {
+        isSeeking = editing
+        guard !editing, let session else { return }
+        session.seek(to: currentTime)
+    }
+
+    func refreshPlaybackState() {
+        guard let session else { return }
+        if !isSeeking, session.currentSeconds.isFinite {
+            currentTime = max(session.currentSeconds, 0)
+        }
+        if session.durationSeconds.isFinite {
+            duration = max(session.durationSeconds, 0)
+        }
+        isPlaying = session.isPlaying
+        isMuted = session.isMuted
+    }
+}
+
+@MainActor
 @Observable
 final class AppState {
     private let libraryService: FrameLibraryService
@@ -45,6 +174,7 @@ final class AppState {
     var selectedFrameImage: NSImage?
     var selectedFrameMaskImage: NSImage?
     var videoPlayer: AVPlayer?
+    let videoPlaybackController = VideoPlaybackController()
     var recentCaptures: [RecentCaptureRecord] = []
     var isImportingFrames = false
     var isExporting = false
@@ -149,6 +279,7 @@ final class AppState {
                 recentCaptures = recentStore.add(url: url, kind: descriptor.kind, to: recentCaptures)
                 settings.exportFormat = descriptor.kind == .image ? .png : .mov
                 videoPlayer = descriptor.kind == .video ? AVPlayer(url: url) : nil
+                videoPlaybackController.bind(to: videoPlayer)
                 detectAndPreview()
             } catch {
                 if accessIsActive { url.stopAccessingSecurityScopedResource() }
@@ -452,6 +583,9 @@ final class AppState {
     }
 
     private func beginSelectedFrameLoad() {
+        if capture?.kind == .video {
+            videoPlaybackController.pauseForFrameChange()
+        }
         frameLoadTask?.cancel()
         previewTask?.cancel()
         copyTask?.cancel()

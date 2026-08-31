@@ -54,6 +54,42 @@ final class VideoRendererTests: XCTestCase {
         ))
     }
 
+    @MainActor
+    func testFrameChangesPauseAndPreservePlaybackStateWithoutPublishingZero() {
+        let session = TestVideoPlaybackSession(
+            currentSeconds: 12.75,
+            durationSeconds: 60,
+            isPlaying: true,
+            isMuted: true
+        )
+        let controller = VideoPlaybackController()
+        controller.bind(to: session)
+
+        XCTAssertEqual(controller.currentTime, 12.75)
+        XCTAssertEqual(controller.duration, 60)
+        XCTAssertTrue(controller.isPlaying)
+        XCTAssertTrue(controller.isMuted)
+
+        controller.pauseForFrameChange()
+
+        XCTAssertEqual(session.pauseCount, 1)
+        XCTAssertFalse(session.isPlaying)
+        XCTAssertFalse(controller.isPlaying)
+        XCTAssertEqual(controller.currentTime, 12.75)
+        XCTAssertEqual(controller.duration, 60)
+        XCTAssertTrue(controller.isMuted)
+
+        session.currentSeconds = .nan
+        controller.refreshPlaybackState()
+        controller.pauseForFrameChange()
+        controller.pauseForFrameChange()
+
+        XCTAssertEqual(session.pauseCount, 3)
+        XCTAssertEqual(controller.currentTime, 12.75)
+        XCTAssertEqual(controller.duration, 60)
+        XCTAssertTrue(controller.isMuted)
+    }
+
     func testTargetBitRatePreservesSourceQualityAcrossLargerCanvas() {
         let sourceSize = CGSize(width: 1_206, height: 2_622)
         let outputSize = CGSize(width: 1_320, height: 2_868)
@@ -401,5 +437,39 @@ final class VideoRendererTests: XCTestCase {
         context.scaleBy(x: 1, y: -1)
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return pixels[3]
+    }
+}
+
+@MainActor
+private final class TestVideoPlaybackSession: VideoPlaybackSession {
+    var currentSeconds: Double
+    var durationSeconds: Double
+    var isPlaying: Bool
+    var isMuted: Bool
+    private(set) var pauseCount = 0
+
+    init(
+        currentSeconds: Double,
+        durationSeconds: Double,
+        isPlaying: Bool,
+        isMuted: Bool
+    ) {
+        self.currentSeconds = currentSeconds
+        self.durationSeconds = durationSeconds
+        self.isPlaying = isPlaying
+        self.isMuted = isMuted
+    }
+
+    func play() {
+        isPlaying = true
+    }
+
+    func pause() {
+        pauseCount += 1
+        isPlaying = false
+    }
+
+    func seek(to seconds: Double) {
+        currentSeconds = seconds
     }
 }
